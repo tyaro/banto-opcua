@@ -1,10 +1,13 @@
 //! async-opcua の `ServerBuilder` を、ループバック既定の待受で包む。
 //!
-//! タグノードの追加はまだしない。標準名前空間が載るところまでがこの足場の範囲。
+//! Phase 1 の固定タグを標準名前空間の Objects 以下に公開する。
 
 use std::net::SocketAddr;
 
-use opcua::server::{ANONYMOUS_USER_TOKEN_ID, ServerBuilder, ServerEndpoint, ServerHandle};
+use opcua::{
+    server::{ANONYMOUS_USER_TOKEN_ID, ServerBuilder, ServerEndpoint, ServerHandle},
+    types::DataValue,
+};
 use tokio::{net::TcpListener, task::JoinHandle};
 
 use crate::{
@@ -12,6 +15,7 @@ use crate::{
     config::{
         host_is_loopback, host_is_unspecified, normalize_endpoint_path, valid_advertised_host,
     },
+    fixed_tags::{self, FixedTags},
 };
 
 /// サーバーを起動する入口。状態は持たない。
@@ -28,6 +32,13 @@ impl OpcUaServer {
     /// bind せずに [`Error::AdvertisedHostRequired`] を返す。ループバック以外へ
     /// 公開するときは警告ログを出す。
     pub async fn start(config: ServerConfig) -> Result<RunningServer, Error> {
+        if config.namespace_uri.trim().is_empty()
+            || config.namespace_uri != config.namespace_uri.trim()
+            || config.namespace_uri == "http://opcfoundation.org/UA/"
+            || config.namespace_uri == config.application_uri
+        {
+            return Err(Error::InvalidNamespaceUri(config.namespace_uri));
+        }
         if config.bind.is_unspecified() && config.explicit_advertised_host().is_none() {
             return Err(Error::AdvertisedHostRequired);
         }
@@ -60,6 +71,7 @@ impl OpcUaServer {
             );
         }
 
+        let namespace_uri = config.namespace_uri.clone();
         let (server, handle) = ServerBuilder::new()
             .application_name(config.application_name)
             .application_uri(config.application_uri)
@@ -76,8 +88,10 @@ impl OpcUaServer {
                 ServerEndpoint::new_none(&path, &[ANONYMOUS_USER_TOKEN_ID.to_owned()]),
             )
             .discovery_urls(vec![endpoint.clone()])
+            .with_node_manager(fixed_tags::node_manager(namespace_uri.clone()))
             .build()
             .map_err(Error::Build)?;
+        let fixed_tags = FixedTags::register(&handle, &namespace_uri)?;
 
         // 一時ディレクトリはタスクが所有する。Drop が先に消すと、停止前の
         // サーバーが証明書を読めなくなる。
@@ -90,6 +104,7 @@ impl OpcUaServer {
             local_addr,
             endpoint,
             handle,
+            fixed_tags,
             task: Some(task),
         })
     }
@@ -105,6 +120,7 @@ pub struct RunningServer {
     local_addr: SocketAddr,
     endpoint: String,
     handle: ServerHandle,
+    fixed_tags: FixedTags,
     task: Option<JoinHandle<Result<(), String>>>,
 }
 
@@ -117,6 +133,29 @@ impl RunningServer {
     /// クライアントが接続する `opc.tcp://` URL。
     pub fn endpoint(&self) -> &str {
         &self.endpoint
+    }
+
+    /// 固定タグの名前空間インデックス。クライアントは URI からも取得できる。
+    pub fn fixed_namespace_index(&self) -> u16 {
+        self.fixed_tags.namespace_index
+    }
+
+    /// Phase 1 の固定タグ `PLC1.Line1.Speed` を更新して購読者へ通知する。
+    /// 有限値以外は拒否する。
+    /// ハブのタグレジストリを接続する Phase 2 で更新 API を置き換える。
+    pub fn set_fixed_speed(&self, speed: f64) -> Result<(), Error> {
+        if !speed.is_finite() {
+            return Err(Error::TagUpdate("Speed は有限値にしてください".to_owned()));
+        }
+        self.fixed_tags
+            .update(&self.handle, "Speed", DataValue::new_now(speed))
+    }
+
+    /// Phase 1 の固定タグ `PLC1.Line1.Running` を更新して購読者へ通知する。
+    /// ハブのタグレジストリを接続する Phase 2 で更新 API を置き換える。
+    pub fn set_fixed_running(&self, running: bool) -> Result<(), Error> {
+        self.fixed_tags
+            .update(&self.handle, "Running", DataValue::new_now(running))
     }
 
     /// クライアントへ切断を知らせてからタスクの終了を待つ。
@@ -222,6 +261,22 @@ mod tests {
                 matches!(err, Error::InvalidAdvertisedHost(_)),
                 "{host}: {err}"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn conflicting_namespace_uri_is_rejected_before_bind() {
+        for uri in [
+            "",
+            " urn:test",
+            "http://opcfoundation.org/UA/",
+            "urn:banto:opcua:server",
+        ] {
+            let err =
+                OpcUaServer::start(ServerConfig::default().with_namespace_uri(uri).with_port(0))
+                    .await
+                    .expect_err("名前空間 URI の衝突を拒否する");
+            assert!(matches!(err, Error::InvalidNamespaceUri(_)), "{uri}: {err}");
         }
     }
 }

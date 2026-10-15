@@ -30,9 +30,9 @@ crates/
 `banto-opcua-core` は async-opcua に依存しない。サーバーとクライアントが
 境界で core の型と async-opcua の型を変換する。
 
-このリポジトリは足場である。標準アドレス空間で待受し、プロセス内で
-クライアントが `ServerStatus/State` を読むところまで。タグのアドレス空間、
-購読、ハブの設定 UI はまだ無い。
+Phase 1 の固定タグを公開する。`Objects/Banto/PLC1/Line1` の `Speed` と
+`Running` を Browse / Read / Subscribe できる。ハブのタグレジストリ、
+設定 UI はまだ接続していない。
 
 ## ロードマップ（banto-industrial #201）
 
@@ -58,10 +58,10 @@ Phase 1 の試験用セキュリティは `None` / `None` / Anonymous。既定 b
 | 層 | いつ | 何を見るか |
 | --- | --- | --- |
 | 単体 | PR の CI（Linux と Windows） | core の写像。サーバーを起動しない |
-| プロセス内 | 同上 | `127.0.0.1` の空きポートでサーバーを起動し、同梱クライアントが接続して `ServerStatus/State` を読む。IPv6 が使える環境では `[::1]` でも同じ疎通を見る（使えなければスキップ） |
+| プロセス内 | 同上 | ループバックで `ServerStatus/State` を読む。固定タグは Browse / Read / DataChange 通知、読み取り専用の AccessLevel を確認する。IPv6 が使える環境では `[::1]` でも標準ノードの疎通を見る |
 | 接続失敗 | 接続処理を変更する PR・毎日・手動（Linux と Windows） | Discovery だけを通すプロキシでセッションを止め、時間切れとキャンセルで TCP 接続が閉じることを確認する。PR の必須 `ci-gate` には含めない |
 | 相互接続 | 別ワークフロー（`workflow_dispatch`、毎日、main への push、PR はパスで絞る） | 予定: Python asyncua クライアント、`mcr.microsoft.com/iotedge/opc-plc`。中身は未実装の TODO |
-| 手動 | 開発者の手元 | UaExpert から Browse / Read / Subscribe |
+| 手動 | 開発者の手元 | 下記のサンプルサーバーを起動し、UaExpert から Browse / Read / Subscribe |
 | 後続 | 認証試験が要るとき | OPC Foundation Compliance Test Tool（CTT） |
 
 プロセス内テストは外部プロセスもコンテナも要らない。相互接続は PR の
@@ -73,6 +73,27 @@ Phase 1 の試験用セキュリティは `None` / `None` / Anonymous。既定 b
 [`client-connect-regression.yml`](.github/workflows/client-connect-regression.yml)。
 テストは Linux / Windows の `127.0.0.0/8` を使う。macOS では既定の
 ループバック設定だと `127.0.0.2` へ bind できない。
+
+## Phase 1 の固定タグ
+
+`ServerConfig::namespace_uri`（既定 `urn:banto:opcua:tags`）に次を登録する。
+名前空間インデックスはサーバーが割り当てるので、固定値に依存せず
+`NamespaceArray` を参照する。初期値は試験用であり、ハブの実データではない。
+
+| Browse パス | NodeId の文字列識別子 | DataType | 初期値 |
+| --- | --- | --- | --- |
+| `Objects/Banto/PLC1/Line1/Speed` | `PLC1.Line1.Speed` | Double | `0.0` |
+| `Objects/Banto/PLC1/Line1/Running` | `PLC1.Line1.Running` | Boolean | `false` |
+
+どちらも `AccessLevel` / `UserAccessLevel` は CurrentRead のみ。値の更新は
+試験用の `RunningServer::set_fixed_speed` / `set_fixed_running` を使う。
+ハブとの結合と品質・時刻の写像は Phase 2。
+
+UaExpert で手動確認するときは `cargo run -p banto-opcua-server --example fixed_tags`
+を実行し、表示されたエンドポイントへ SecurityPolicy `None`、Anonymous で
+接続する。`Objects/Banto/PLC1/Line1` を開き、2 つの変数を Data Access View
+へ追加する。サンプルサーバーの端末で Enter を押すたびに値が変わり、
+MonitoredItem に DataChange が届く。`q` で停止する。
 
 ## 開発
 

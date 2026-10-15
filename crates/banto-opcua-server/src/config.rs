@@ -23,7 +23,9 @@ pub struct ServerConfig {
     pub application_uri: String,
     /// ProductUri。
     pub product_uri: String,
-    /// タグを載せる予定の名前空間 URI。この足場ではまだ登録しない。
+    /// Phase 1 の固定タグを登録する名前空間 URI。空文字と標準・アプリケーション
+    /// 名前空間との重複は起動時に拒否する。async-opcua 0.19 が自動登録するのは
+    /// 標準 URI と ApplicationUri の 2 つで、固定タグはそれらと別の URI を使う。
     pub namespace_uri: String,
     /// エンドポイント URL と discovery URL に載せるホスト。
     ///

@@ -13,6 +13,7 @@
 - サーバーの `advertised_host`。未指定アドレスで未設定なら起動しない。
 - `ServerConfig` の `with_*` 設定メソッドと、接続待ち時間を指定できるクライアント API。
 - 接続待ちの時間切れとキャンセルで TCP 接続が閉じることを確かめる、対象 PR と nightly の回帰テスト。
+- Phase 1 の固定タグ `Speed` / `Running`。Browse / Read / Subscription と試験用の値更新 API、UaExpert 用のサンプルサーバー。
 
 ### 修正
 
