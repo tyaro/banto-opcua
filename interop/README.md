@@ -9,7 +9,7 @@
 | Python asyncua → banto-opcua-server | Python 3.12、`asyncua==1.1.8` と `requirements.txt` の依存 | GetEndpoints、固定タグの Browse・Read・Subscription、更新後の値と Good 品質 |
 | banto-opcua-client → opc-plc | `mcr.microsoft.com/iotedge/opc-plc:2.9.9-linux-amd64`（digest `sha256:3d16f104393869540403390e617a2d6afe98b3b0673fb9d8ff1533f35b6726cf`） | `ServerStatus/State` が Running、`ns=3;s=FastUInt1` が UInt32 として読める |
 
-ローカルで Python 経路を動かす:
+ローカルで Python 経路を動かす（起動待ちに `select.select` を使うため Linux / macOS 対象）:
 
 ```sh
 cargo build --locked -p banto-opcua-server --example interop_fixed_tags
@@ -20,6 +20,8 @@ python3 -m venv /tmp/banto-opcua-interop-venv
 
 opc-plc 経路は Docker が必要。コンテナの endpoint は `0.0.0.0:50000` で
 待ち受けさせ、ホスト側は `127.0.0.1:50000` だけへ公開する。
+opc-plc は wildcard ホストを endpoint に通知するが、クライアントは指定した
+`127.0.0.1` の接続先でセッションを確立する。
 
 ```sh
 cargo build --locked -p banto-opcua-client --example interop_read

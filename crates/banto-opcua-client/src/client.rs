@@ -136,7 +136,7 @@ impl ConnectedClient {
     }
 
     /// 指定した NodeId の UInt32 値を読む。外部サーバーのタグ Read に使う。
-    /// 値が無い、または Bad の場合はエラーにする。
+    /// 値が無い、StatusCode が Bad、または型が UInt32 以外の場合はエラーにする。
     pub async fn read_u32(&self, node_id: &NodeId) -> Result<u32, Error> {
         let id = match &node_id.identifier {
             Identifier::Numeric(id) => UaNodeId::new(node_id.namespace, *id),

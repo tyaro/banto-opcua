@@ -29,6 +29,35 @@ async def verify(endpoint, process):
         running = await line.get_child(f"{namespace}:Running")
         assert speed.nodeid.Identifier == "PLC1.Line1.Speed"
         assert running.nodeid.Identifier == "PLC1.Line1.Running"
+        # get_child は BrowsePath 変換なので、Browse サービスも直接確認する。
+        parent = client.nodes.objects
+        for name, identifier in (
+            ("Banto", "Banto"),
+            ("PLC1", "PLC1"),
+            ("Line1", "PLC1.Line1"),
+        ):
+            references = await parent.get_children_descriptions()
+            matches = [
+                ref
+                for ref in references
+                if (ref.BrowseName.NamespaceIndex, ref.BrowseName.Name)
+                == (namespace, name)
+            ]
+            assert len(matches) == 1, references
+            assert matches[0].NodeId.NamespaceIndex == namespace
+            assert matches[0].NodeId.Identifier == identifier
+            parent = client.get_node(matches[0].NodeId)
+        assert parent.nodeid == line.nodeid
+        references = await line.get_children_descriptions()
+        assert len(references) == 2, references
+        children = {
+            (ref.BrowseName.NamespaceIndex, ref.BrowseName.Name): ref.NodeId.Identifier
+            for ref in references
+        }
+        assert children == {
+            (namespace, "Speed"): "PLC1.Line1.Speed",
+            (namespace, "Running"): "PLC1.Line1.Running",
+        }, references
         assert await speed.read_value() == 0.0
         assert await running.read_value() is False
 
@@ -39,10 +68,18 @@ async def verify(endpoint, process):
             process.stdin.write("update\n")
             process.stdin.flush()
 
+            expected = {
+                speed.nodeid.to_string(): (float, 42.5),
+                running.nodeid.to_string(): (bool, True),
+            }
             received = {}
             while len(received) < 2:
                 node_id, value, data = await asyncio.wait_for(changes.values.get(), timeout=10)
-                if value in (42.5, True):
+                if (
+                    node_id in expected
+                    and type(value) is expected[node_id][0]
+                    and value == expected[node_id][1]
+                ):
                     assert data.monitored_item.Value.StatusCode.is_good()
                     received[node_id] = value
             assert received[speed.nodeid.to_string()] == 42.5
@@ -67,7 +104,6 @@ def main():
         if not line.startswith("ENDPOINT="):
             raise RuntimeError(f"サーバーの接続先がありません: {line!r}")
         asyncio.run(verify(line.removeprefix("ENDPOINT="), process))
-        print("asyncua interop passed")
     finally:
         if process.poll() is None:
             try:
@@ -77,8 +113,9 @@ def main():
             except (BrokenPipeError, subprocess.TimeoutExpired):
                 process.kill()
                 process.wait()
-        if process.returncode != 0:
-            raise RuntimeError(f"サーバーが異常終了しました: {process.returncode}")
+    if process.returncode != 0:
+        raise RuntimeError(f"サーバーが異常終了しました: {process.returncode}")
+    print("asyncua interop passed")
 
 
 if __name__ == "__main__":

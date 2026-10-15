@@ -75,7 +75,7 @@ jobs:
 
       - name: Start pinned opc-plc
         run: |
-          docker run --rm -d --name banto-opcua-interop \
+          docker run -d --name banto-opcua-interop \
             -p 127.0.0.1:50000:50000 \
             mcr.microsoft.com/iotedge/opc-plc@sha256:3d16f104393869540403390e617a2d6afe98b3b0673fb9d8ff1533f35b6726cf \
             --ut --aa --pn=50000 --ph=0.0.0.0
