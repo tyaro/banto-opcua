@@ -13,7 +13,8 @@ PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read �
 段階 4 の外部テストも PR #15 で実装し、main の 2 経路が成功した。
 [#7](https://github.com/tyaro/banto-opcua/issues/7) は upstream の修正を固定し、
 フィルタ未指定の実 Subscription で品質変更を検証した。
-次は [#5](https://github.com/tyaro/banto-opcua/issues/5) の動的ノードを進める。
+[#5](https://github.com/tyaro/banto-opcua/issues/5) のタグ追加・削除と
+削除後の購読継続も本リポジトリで実装した。
 ハブとの接続、管理 UI、Windows Service は未実装。
 以下は依存関係に沿った作業順であり、各段階を独立した PR で検証する。
 
@@ -57,9 +58,12 @@ PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read �
   industrial 側の `allow-git` に同 URL を一時的に加える。
   `required-git-spec = "tag"` は最低要件であり、本依存の `rev` はこれを満たす。
   MPL-2.0 のソースは本リポジトリの MIT ファイルへコピーしない。
-- #5 はタグの追加・削除を扱う node manager の導入後に実装する。
-  `BadNodeIdUnknown` を通知する順序と、削除後も MonitoredItem が残ることを
-  実際の Subscription で確かめる。
+- #5 はタグの追加・削除を node manager に実装した。削除通知
+  `BadNodeIdUnknown` を流してからノードを外し、MonitoredItem は消さない。
+  同じ NodeId の再登録と、リネーム後の新しい NodeId を実 Subscription と
+  Browse / Read で確かめる。追加 API の初期値は試験用に登録時刻を付ける。
+  空になった接続・グループのフォルダーは、同じ階層への再登録に備えて残す。
+  ハブのタグレジストリと実データの時刻との結合は #201 で行う。
 - #9 の Python 経路は段階 1 の後に先行できる。opc-plc 経路には、現状の
   `ServerStatus/State` 専用 Read より広い、NodeId を指定する最小限の
   クライアント Read API が要る。#9 の外部テストで UInt32 タグの Read API を

@@ -8,8 +8,9 @@
 //! 未指定アドレス（`0.0.0.0` / `::`）で待受するときは `advertised_host` が
 //! 必須。ループバック以外への公開は明示したときだけで、警告ログを出す。
 //!
-//! Phase 1 の固定タグ `Speed` / `Running` を Browse / Read / Subscribe
-//! できる。プロセス内の疎通は `tests/fixed_tags.rs`。
+//! Phase 1 の固定タグ `Speed` / `Running` に加え、タグの追加・削除と
+//! 同じ NodeId の復帰を扱う。プロセス内の疎通は `tests/fixed_tags.rs` と
+//! `tests/dynamic_nodes.rs`。
 
 mod config;
 mod error;
