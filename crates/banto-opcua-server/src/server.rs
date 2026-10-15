@@ -156,6 +156,7 @@ impl RunningServer {
     /// 固定タグ `Speed` の現在値と品質を更新する。Phase 2 の結合前に
     /// フィルタ未指定の購読通知を検証するための入口。
     /// Bad 品質と欠損値では、core の写像に従い値を公開しない。
+    /// 実タグの時刻はここで現在時刻を作らず、#8 の SampleTimestamps を使う。
     pub fn set_fixed_speed_reading(
         &self,
         speed: Option<f64>,
@@ -166,6 +167,7 @@ impl RunningServer {
         let value = DataValue {
             // upstream の Variable::value は Value フィールド自体が None だと
             // StatusCode も落とす。Null Variant で値なしを表して Bad を保つ。
+            // 回避策の見直しは #17 で追跡する。
             value: Some(match reading.value {
                 Some(MappedValue::Boolean(bit)) => Variant::Boolean(bit),
                 Some(MappedValue::Double(number)) => Variant::Double(number),

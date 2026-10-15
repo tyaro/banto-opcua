@@ -30,8 +30,15 @@ ADR-0002 は「依存を足さない」を既定にしつつ、自前実装が�
 フィルタ未指定の購読で品質変更を通知する [upstream PR #274](https://github.com/FreeOpcUa/async-opcua/pull/274)
 は 0.19.0 公開後にマージされた。#7 の実 Subscription 試験を通すため、修正を含む
 `1ba60ed14177a2590ee75526af40602987a14123` を一時的に固定する。
-次の公開版に修正が入ったら crates.io 依存へ戻す。このコミットには 0.19.0 以降の
-別の upstream 変更も含まれるため、依存更新時は回帰テストと cargo-deny を実行する。
+次の公開版に修正が入ったら crates.io 依存へ戻す（[#17](https://github.com/tyaro/banto-opcua/issues/17)）。
+このコミットには 0.19.0 以降の別の upstream 変更も含まれるため、依存更新時は
+回帰テストと cargo-deny を実行する。
+
+banto-industrial の `deny.toml` は `unknown-git = "deny"` だけでなく
+`required-git-spec = "tag"` も指定する。本リポジトリの `allow-git` を増やしても
+`rev` 依存は通らない。ハブへ取り込むタグは、#17 で crates.io 版へ戻した後に切る。
+それより先に取り込む場合は、banto-industrial 側で依存ソース方針の変更を決め、
+そのリポジトリの cargo-deny を通す必要がある。
 
 - `banto-opcua-server` は feature `server`（標準アドレス空間を含む）だけを有効にする。
 - `banto-opcua-client` は feature `client` だけを有効にする。

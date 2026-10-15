@@ -50,6 +50,10 @@ PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read �
   公開版へ入るまでは修正を含むコミットを固定して使い、公開版が出たら戻す。
   値なし・Bad は Null Variant として渡す。現行 upstream の Variable 読み出しは
   DataValue の Value フィールド自体を省くと StatusCode も落とすため。
+  公開版への復帰と Null Variant 回避策の見直しは
+  [#17](https://github.com/tyaro/banto-opcua/issues/17) で追跡する。
+  banto-industrial の `required-git-spec = "tag"` は本依存の `rev` を拒否するため、
+  ハブ結合用のタグは #17 完了後に切るか、industrial 側の方針変更が必要。
   MPL-2.0 のソースは本リポジトリの MIT ファイルへコピーしない。
 - #5 はタグの追加・削除を扱う node manager の導入後に実装する。
   `BadNodeIdUnknown` を通知する順序と、削除後も MonitoredItem が残ることを
