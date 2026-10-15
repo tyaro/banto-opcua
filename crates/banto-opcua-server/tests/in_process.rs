@@ -69,6 +69,9 @@ async fn client_reads_server_state_on_ipv6_loopback() {
 }
 
 /// `[::1]` へ bind できなければ IPv6 テストをスキップする。
+///
+/// `BANTO_OPCUA_REQUIRE_IPV6=1` のときはスキップせず失敗する。ubuntu の CI
+/// だけがこの変数を置く。
 fn ipv6_loopback_available() -> bool {
     match std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, 0)) {
         Ok(listener) => {
@@ -76,7 +79,16 @@ fn ipv6_loopback_available() -> bool {
             true
         }
         Err(err) => {
-            eprintln!("IPv6 の [::1] へ bind できないためスキップします: {err}");
+            let required = std::env::var("BANTO_OPCUA_REQUIRE_IPV6").ok().as_deref() == Some("1");
+            let message = if required {
+                format!(
+                    "IPv6 の [::1] へ bind できません。BANTO_OPCUA_REQUIRE_IPV6=1 のためスキップせず失敗します: {err}"
+                )
+            } else {
+                format!("IPv6 の [::1] へ bind できないためスキップします: {err}")
+            };
+            eprintln!("{message}");
+            assert!(!required, "{message}");
             false
         }
     }

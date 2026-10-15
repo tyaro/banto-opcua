@@ -16,7 +16,7 @@ banto-opcua-core = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing = { workspace = true }
 
 [dev-dependencies]
 banto-opcua-client = { path = "../banto-opcua-client" }

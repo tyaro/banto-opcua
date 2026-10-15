@@ -109,4 +109,4 @@ banto の ADR-0011 に合わせ、配布は git タグを予定する。crates.i
 
 - **削除されたノードの購読。** `BadNodeIdUnknown` を通知する。MonitoredItem は残し、同じ NodeId が戻ったら購読を再開する。実装は `notify_data_change`。定数 `StatusCode::BAD_NODE_ID_UNKNOWN` だけ置いてある。
 - **非有限値と bit。** NaN / Inf、および 0 と 1 以外の bit 値は Bad とする契約にする。現状のハブは NaN を null かつ Good で出す。
-- **品質だけの変化。** 値が変わらず品質だけ Good から Stale になったとき、通知が飛ばない。`DataChangeFilter` の trigger を `StatusValue` にする。
+- **品質だけの変化。** 値が変わらず品質だけ Good から Stale になったとき、通知が飛ばない。`DataChangeFilter` はクライアントが指定するもので、サーバーから trigger を強制できない。サーバー側でフィルタ未指定を `StatusValue` として扱う回避策、または upstream（async-opcua）の修正が必要。

@@ -46,7 +46,14 @@ impl SampleTimestamps {
 /// 刻みが i64 に収まらない時刻は `None`。
 pub fn opcua_ticks_from_system_time(time: SystemTime) -> Option<i64> {
     let since_unix = time.duration_since(UNIX_EPOCH).ok()?;
-    let ticks_since_unix = since_unix.as_nanos() / 100;
+    opcua_ticks_from_unix_nanos(since_unix.as_nanos())
+}
+
+/// Unix エポックからのナノ秒を OPC UA の刻みへ変換する。
+///
+/// `SystemTime` の表現範囲（Windows は 30828 年付近で止まる）には依存しない。
+fn opcua_ticks_from_unix_nanos(nanos_since_unix: u128) -> Option<i64> {
+    let ticks_since_unix = nanos_since_unix / 100;
     let ticks_since_unix = i64::try_from(ticks_since_unix).ok()?;
     ticks_since_unix.checked_add(UNIX_EPOCH_TICKS)
 }
@@ -93,38 +100,48 @@ mod tests {
     fn nanoseconds_past_i64_still_convert_when_ticks_fit() {
         // i64::MAX ナノ秒は 2262 年付近。ナノ秒を i64 に入れてから割ると None になる。
         let nanos = u128::from(i64::MAX as u64) + 1;
-        let time = UNIX_EPOCH + Duration::from_nanos(u64::try_from(nanos).expect("nanos"));
         let ticks_since_unix = i64::try_from(nanos / 100).expect("ticks");
+        let expected = ticks_since_unix + UNIX_EPOCH_TICKS;
+        assert_eq!(opcua_ticks_from_unix_nanos(nanos), Some(expected));
+        let time = system_time_after_unix_nanos(nanos).expect("2262 年付近は SystemTime に収まる");
+        assert_eq!(opcua_ticks_from_system_time(time), Some(expected));
+    }
+
+    #[test]
+    fn year_2300_matches_the_opc_ua_tick_count() {
+        // 2300-01-01 UTC。Windows の SystemTime にも収まる。
+        let secs = 10_413_792_000_u64;
+        let expected = 220_582_656_000_000_000_i64;
         assert_eq!(
-            opcua_ticks_from_system_time(time),
-            Some(ticks_since_unix + UNIX_EPOCH_TICKS)
+            opcua_ticks_from_unix_nanos(u128::from(secs) * 1_000_000_000),
+            Some(expected)
         );
+        let time = UNIX_EPOCH
+            .checked_add(Duration::from_secs(secs))
+            .expect("2300 年は SystemTime に収まる");
+        assert_eq!(opcua_ticks_from_system_time(time), Some(expected));
     }
 
     #[test]
     fn last_representable_tick_is_some_and_the_next_is_none() {
-        let max_ticks_since_unix =
-            u64::try_from(i64::MAX - UNIX_EPOCH_TICKS).expect("ticks since unix");
-        let time = time_at_ticks_since_unix(max_ticks_since_unix);
-        assert_eq!(opcua_ticks_from_system_time(time), Some(i64::MAX));
-        let next = time + Duration::from_nanos(100);
-        assert_eq!(opcua_ticks_from_system_time(next), None);
+        // OPC UA の最終刻みは Windows の SystemTime では表せないので、ナノ秒の
+        // 整数だけで検証する。
+        let max_ticks_since_unix = u128::try_from(i64::MAX - UNIX_EPOCH_TICKS).expect("ticks");
+        let nanos = max_ticks_since_unix * 100;
+        assert_eq!(opcua_ticks_from_unix_nanos(nanos), Some(i64::MAX));
+        assert_eq!(opcua_ticks_from_unix_nanos(nanos + 100), None);
     }
 
     #[test]
     fn ticks_that_do_not_fit_in_i64_are_none() {
         let ticks = u128::from(i64::MAX as u64) + 1;
-        let secs = u64::try_from(ticks / 10_000_000).expect("secs");
-        let nanos = u32::try_from((ticks % 10_000_000) * 100).expect("nanos");
-        let time = UNIX_EPOCH
-            .checked_add(Duration::new(secs, nanos))
-            .expect("time");
-        assert_eq!(opcua_ticks_from_system_time(time), None);
+        assert_eq!(opcua_ticks_from_unix_nanos(ticks * 100), None);
     }
 
-    fn time_at_ticks_since_unix(ticks: u64) -> SystemTime {
-        let secs = ticks / 10_000_000;
-        let nanos = u32::try_from((ticks % 10_000_000) * 100).expect("subsec nanos");
-        UNIX_EPOCH + Duration::new(secs, nanos)
+    /// `SystemTime` に収まらないナノ秒は `None`。加算で panic しない。
+    fn system_time_after_unix_nanos(nanos: u128) -> Option<SystemTime> {
+        let secs = u64::try_from(nanos / 1_000_000_000).ok()?;
+        let subsec = u32::try_from(nanos % 1_000_000_000).ok()?;
+        UNIX_EPOCH.checked_add(Duration::new(secs, subsec))
     }
 }

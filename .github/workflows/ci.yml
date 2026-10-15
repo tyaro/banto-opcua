@@ -102,7 +102,11 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        env:
+          # ubuntu は [::1] のスキップを禁止する。Windows は IPv6 が無い
+          # ランナーがあり得るので禁止しない。スキップ時の eprintln をログに残す。
+          BANTO_OPCUA_REQUIRE_IPV6: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
+        run: cargo test --workspace -- --nocapture
 
   deny:
     name: cargo-deny
