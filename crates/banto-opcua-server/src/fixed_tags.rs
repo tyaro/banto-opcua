@@ -1,4 +1,5 @@
-//! Phase 1 の実接続試験に使う固定タグ。ハブのタグレジストリとの結合は Phase 2。
+//! Phase 1 の固定タグと、Phase 2 の追加・削除可能なタグ。
+//! ハブのタグレジストリとの結合は banto-industrial #201 で行う。
 
 use std::sync::Arc;
 
@@ -9,7 +10,10 @@ use opcua::{
         diagnostics::NamespaceMetadata,
         node_manager::memory::{SimpleNodeManager, simple_node_manager},
     },
-    types::{DataValue, NodeId, ObjectId, QualifiedName, ReferenceTypeId, VariableTypeId},
+    types::{
+        AttributeId, DataValue, DateTime, NodeId, ObjectId, QualifiedName, ReferenceTypeId,
+        StatusCode, VariableTypeId, Variant,
+    },
 };
 
 use crate::Error;
@@ -99,4 +103,114 @@ impl FixedTags {
             .set_value(handle.subscriptions(), &id, None, value)
             .map_err(|status| Error::TagUpdate(status.to_string()))
     }
+
+    /// 外部名の階層に読み取り専用の変数を追加する。既存ノードは上書きしない。
+    pub fn add_tag(
+        &self,
+        handle: &ServerHandle,
+        connection: &str,
+        group: &str,
+        tag: &str,
+        value: Variant,
+    ) -> Result<(), Error> {
+        validate_path(connection, group, tag)?;
+        let connection_id = NodeId::new(self.namespace_index, connection);
+        let group_id = NodeId::new(self.namespace_index, format!("{connection}.{group}"));
+        let tag_id = NodeId::new(self.namespace_index, format!("{connection}.{group}.{tag}"));
+        {
+            let mut space = self.manager.address_space().write();
+            if space.node_exists(&tag_id) {
+                return Err(Error::TagUpdate(format!("タグ {tag_id} は登録済みです")));
+            }
+            for (id, name, parent) in [
+                (
+                    &connection_id,
+                    connection,
+                    NodeId::new(self.namespace_index, "Banto"),
+                ),
+                (&group_id, group, connection_id.clone()),
+            ] {
+                if !space.node_exists(id)
+                    && !ObjectBuilder::new(id, QualifiedName::new(self.namespace_index, name), name)
+                        .is_folder()
+                        .organized_by(parent)
+                        .insert(&mut *space)
+                {
+                    return Err(Error::TagUpdate(format!(
+                        "フォルダー {id} を登録できません"
+                    )));
+                }
+            }
+            if !space.insert::<_, NodeId>(
+                Variable::new(
+                    &tag_id,
+                    QualifiedName::new(self.namespace_index, tag),
+                    tag,
+                    value.clone(),
+                ),
+                None,
+            ) {
+                return Err(Error::TagUpdate(format!("タグ {tag_id} を登録できません")));
+            }
+            space.insert_reference(&group_id, &tag_id, ReferenceTypeId::HasComponent);
+            space.insert_reference(
+                &tag_id,
+                &VariableTypeId::BaseDataVariableType.into(),
+                ReferenceTypeId::HasTypeDefinition,
+            );
+        }
+        self.manager
+            .set_value(
+                handle.subscriptions(),
+                &tag_id,
+                None,
+                DataValue::new_now(value),
+            )
+            .map_err(|status| Error::TagUpdate(status.to_string()))
+    }
+
+    /// 削除通知を流してからアドレス空間から外す。MonitoredItem は保持する。
+    pub fn remove_tag(
+        &self,
+        handle: &ServerHandle,
+        connection: &str,
+        group: &str,
+        tag: &str,
+    ) -> Result<(), Error> {
+        validate_path(connection, group, tag)?;
+        let id = NodeId::new(self.namespace_index, format!("{connection}.{group}.{tag}"));
+        let mut space = self.manager.address_space().write();
+        if !space.node_exists(&id) {
+            return Err(Error::TagUpdate(format!("タグ {id} が見つかりません")));
+        }
+        let now = DateTime::now();
+        handle.subscriptions().notify_data_change(
+            [(
+                DataValue {
+                    value: Some(Variant::Empty),
+                    status: Some(StatusCode::BadNodeIdUnknown),
+                    source_timestamp: Some(now),
+                    server_timestamp: Some(now),
+                    ..Default::default()
+                },
+                &id,
+                AttributeId::Value,
+            )]
+            .into_iter(),
+        );
+        space.delete(&id, true);
+        Ok(())
+    }
+}
+
+fn validate_path(connection: &str, group: &str, tag: &str) -> Result<(), Error> {
+    if [connection, group, tag]
+        .into_iter()
+        .any(|part| part.is_empty() || part.contains('.'))
+    {
+        return Err(Error::TagUpdate(
+            "タグの各名前は空にせず、'.' を含めないでください".to_owned(),
+        ));
+    }
+    Ok(())
 }

@@ -1,6 +1,6 @@
 //! async-opcua の `ServerBuilder` を、ループバック既定の待受で包む。
 //!
-//! Phase 1 の固定タグを標準名前空間の Objects 以下に公開する。
+//! Phase 1 の固定タグと、追加・削除できるタグを Objects 以下に公開する。
 
 use std::net::SocketAddr;
 
@@ -137,9 +137,45 @@ impl RunningServer {
         &self.endpoint
     }
 
-    /// 固定タグの名前空間インデックス。クライアントは URI からも取得できる。
-    pub fn fixed_namespace_index(&self) -> u16 {
+    /// タグの名前空間インデックス。クライアントは URI からも取得できる。
+    pub fn namespace_index(&self) -> u16 {
         self.fixed_tags.namespace_index
+    }
+
+    /// Phase 1 の固定タグの名前空間インデックス。
+    pub fn fixed_namespace_index(&self) -> u16 {
+        self.namespace_index()
+    }
+
+    /// `{connection}.{group}.{tag}` の読み取り専用タグを追加する。
+    /// 同じ NodeId が既にあればエラー。接続・グループのフォルダーは必要なら作る。
+    /// 各名前は空文字と `.` を含めない。初期値には登録時刻を付ける試験用 API。
+    /// ハブの実データと SourceTimestamp の結合は banto-industrial #201 で行う。
+    pub fn add_tag(
+        &self,
+        connection: &str,
+        group: &str,
+        tag: &str,
+        value: MappedValue,
+    ) -> Result<(), Error> {
+        let value = match value {
+            MappedValue::Boolean(bit) => Variant::Boolean(bit),
+            MappedValue::Double(number) if number.is_finite() => Variant::Double(number),
+            MappedValue::Double(_) => {
+                return Err(Error::TagUpdate(
+                    "タグの初期値は有限値にしてください".to_owned(),
+                ));
+            }
+        };
+        self.fixed_tags
+            .add_tag(&self.handle, connection, group, tag, value)
+    }
+
+    /// タグを削除し、既存の購読へ `BadNodeIdUnknown` を通知する。
+    /// MonitoredItem は保持し、同じ NodeId の再登録で通知が再開する。
+    pub fn remove_tag(&self, connection: &str, group: &str, tag: &str) -> Result<(), Error> {
+        self.fixed_tags
+            .remove_tag(&self.handle, connection, group, tag)
     }
 
     /// Phase 1 の固定タグ `PLC1.Line1.Speed` を更新して購読者へ通知する。
