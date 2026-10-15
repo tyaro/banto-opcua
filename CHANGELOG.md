@@ -18,6 +18,7 @@
 - core の品質別 SourceTimestamp 写像。時刻不明は null のままにし、固定タグの反復 Read でも採取時刻を保持する。
 - 指定 NodeId の UInt32 値を読むクライアント API `read_u32`。
 - Python asyncua と opc-plc を使う外部相互接続テスト。固定タグの Browse・Read・購読と外部サーバーの UInt32 タグ Read を検証する。
+- フィルタ未指定の購読で品質だけが変わる場合の通知テスト。修正を含む async-opcua の upstream コミットを一時的に固定する。
 
 ### 修正
 

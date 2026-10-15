@@ -138,4 +138,4 @@ banto の ADR-0011 に合わせ、配布は git タグを予定する。crates.i
 
 - **削除されたノードの購読。** `BadNodeIdUnknown` を通知する。MonitoredItem は残し、同じ NodeId が戻ったら購読を再開する。実装は `notify_data_change`。定数 `StatusCode::BAD_NODE_ID_UNKNOWN` だけ置いてある。
 - **非有限値と bit。** core の値・品質変換をハブの現在値へ接続する。現状のハブは NaN を null かつ Good で出す。共通の読み取り契約は [banto-industrial #615](https://github.com/tyaro/banto-industrial/issues/615) で未決定。
-- **品質だけの変化。** 値が変わらず品質だけ Good から Stale になったとき、通知が飛ばない。`DataChangeFilter` はクライアントが指定するもので、サーバーから trigger を強制できない。サーバー側でフィルタ未指定を `StatusValue` として扱う回避策、または upstream（async-opcua）の修正が必要。
+- **品質だけの変化。** [async-opcua PR #274](https://github.com/FreeOpcUa/async-opcua/pull/274) の修正済みコミットを固定し、フィルタ未指定でも Good → Stale → Good の通知を実 Subscription テストで確認した。Good → Bad では core の契約どおり値を Null にして通知し、復帰も確認した。公開版への依存復帰と Null Variant 回避策の見直しは [#17](https://github.com/tyaro/banto-opcua/issues/17) で追跡する。ハブの実タグとの結合は後続。

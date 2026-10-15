@@ -8,8 +8,12 @@
 
 PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read までを実装した。
 段階 0 は PR #10、段階 1 の固定タグは PR #12 で完了した。段階 2 の
-[#6](https://github.com/tyaro/banto-opcua/issues/6) の core 写像は PR #13 で完了。
-次は [#8](https://github.com/tyaro/banto-opcua/issues/8) の core 写像を進める。
+[#6](https://github.com/tyaro/banto-opcua/issues/6) の core 写像は PR #13、
+[#8](https://github.com/tyaro/banto-opcua/issues/8) の core 写像は PR #14 で完了。
+段階 4 の外部テストも PR #15 で実装し、main の 2 経路が成功した。
+[#7](https://github.com/tyaro/banto-opcua/issues/7) は upstream の修正を固定し、
+フィルタ未指定の実 Subscription で品質変更を検証した。
+次は [#5](https://github.com/tyaro/banto-opcua/issues/5) の動的ノードを進める。
 ハブとの接続、管理 UI、Windows Service は未実装。
 以下は依存関係に沿った作業順であり、各段階を独立した PR で検証する。
 
@@ -41,10 +45,18 @@ PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read �
   core の写像は Good に採取時刻、Bad / Stale に認識時刻、不明なら null を返す。
   Read のたびに SourceTimestamp を現在時刻へ差し替えない。PLC タグと Hub ソースの
   Stale の違いは core に渡す品質認識時刻に表れ、#614 の結合時に実データで検証する。
-- #7 は async-opcua 0.19 のフィルタ未指定時の値だけの比較に阻まれる。
-  `notify_data_change` を呼ぶだけでは品質だけの変化は通らない。upstream へ
-  再現例を報告し、MonitoredItem の既定フィルタを変える拡張点か upstream の
-  修正で解決する。MPL-2.0 のソースは本リポジトリの MIT ファイルへコピーしない。
+- #7 は async-opcua 0.19.0 のフィルタ未指定時の値だけの比較に阻まれるが、
+  [upstream PR #274](https://github.com/FreeOpcUa/async-opcua/pull/274) で修正済み。
+  公開版へ入るまでは修正を含むコミットを固定して使い、公開版が出たら戻す。
+  値なし・Bad は Null Variant として渡す。現行 upstream の Variable 読み出しは
+  DataValue の Value フィールド自体を省くと StatusCode も落とすため。
+  公開版への復帰と Null Variant 回避策の見直しは
+  [#17](https://github.com/tyaro/banto-opcua/issues/17) で追跡する。
+  banto-industrial は `unknown-git = "deny"` で、`allow-git` に async-opcua の
+  URL がない。ハブ結合用のタグは #17 完了後に切るか、先に取り込む場合は
+  industrial 側の `allow-git` に同 URL を一時的に加える。
+  `required-git-spec = "tag"` は最低要件であり、本依存の `rev` はこれを満たす。
+  MPL-2.0 のソースは本リポジトリの MIT ファイルへコピーしない。
 - #5 はタグの追加・削除を扱う node manager の導入後に実装する。
   `BadNodeIdUnknown` を通知する順序と、削除後も MonitoredItem が残ることを
   実際の Subscription で確かめる。
