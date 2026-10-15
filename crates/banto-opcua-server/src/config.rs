@@ -29,6 +29,7 @@ pub struct ServerConfig {
     ///
     /// 未設定なら bind した具体的なアドレスを載せる。未指定アドレス
     /// （`0.0.0.0` / `::`）で待受するときは必須。IPv6 は括弧なしでもよい。
+    /// DNS 名の末尾のドットは URL に載せるときに除く。
     pub advertised_host: Option<String>,
 }
 
@@ -141,10 +142,11 @@ pub(crate) fn valid_advertised_host(host: &str) -> bool {
     if host.parse::<IpAddr>().is_ok() {
         return true;
     }
-    if host.len() > 253 || !host.is_ascii() {
+    let dns_name = host.strip_suffix('.').unwrap_or(host);
+    if dns_name.len() > 253 || !dns_name.is_ascii() {
         return false;
     }
-    host.split('.').all(|label| {
+    dns_name.split('.').all(|label| {
         !label.is_empty()
             && label.len() <= 63
             && label
@@ -171,7 +173,7 @@ pub(crate) fn format_endpoint_host(host: &str) -> String {
     if bare.parse::<std::net::Ipv6Addr>().is_ok() {
         format!("[{bare}]")
     } else {
-        host.to_owned()
+        host.strip_suffix('.').unwrap_or(host).to_owned()
     }
 }
 
@@ -201,7 +203,9 @@ pub(crate) fn host_is_loopback(host: &str) -> bool {
         .strip_prefix('[')
         .and_then(|rest| rest.strip_suffix(']'))
         .unwrap_or(bare);
-    bare.eq_ignore_ascii_case("localhost")
+    bare.strip_suffix('.')
+        .unwrap_or(bare)
+        .eq_ignore_ascii_case("localhost")
 }
 
 fn ip_from_host(host: &str) -> Option<IpAddr> {
@@ -210,7 +214,7 @@ fn ip_from_host(host: &str) -> Option<IpAddr> {
         .strip_prefix('[')
         .and_then(|rest| rest.strip_suffix(']'))
         .unwrap_or(host);
-    bare.parse().ok()
+    bare.strip_suffix('.').unwrap_or(bare).parse().ok()
 }
 
 #[cfg(test)]
@@ -303,7 +307,14 @@ mod tests {
 
     #[test]
     fn advertised_host_accepts_hostnames_and_ip_addresses_only() {
-        for host in ["localhost", "plc.example.com", "192.0.2.10", "::1", "[::1]"] {
+        for host in [
+            "localhost",
+            "plc.example.com",
+            "plc.example.com.",
+            "192.0.2.10",
+            "::1",
+            "[::1]",
+        ] {
             assert!(valid_advertised_host(host), "{host}");
         }
         for host in [
@@ -320,9 +331,19 @@ mod tests {
             "-host",
             "host-",
             "host..example",
+            "plc.example.com..",
+            "[::1].",
             "host:foo",
         ] {
             assert!(!valid_advertised_host(host), "{host}");
         }
+        let config = ServerConfig::default().with_advertised_host("plc.example.com.");
+        let bound = SocketAddr::from((Ipv4Addr::LOCALHOST, 4840));
+        assert_eq!(
+            config.endpoint_url(bound),
+            "opc.tcp://plc.example.com:4840/"
+        );
+        assert!(host_is_unspecified("0.0.0.0."));
+        assert!(host_is_loopback("localhost."));
     }
 }

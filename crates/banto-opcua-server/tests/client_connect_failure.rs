@@ -1,4 +1,5 @@
 //! Discovery だけを中継し、セッション用の TCP 応答を止めて接続失敗を再現する。
+//! Linux / Windows のループバック全域を使う。macOS は `127.0.0.2` が既定で使えない。
 
 use std::{net::Ipv4Addr, time::Duration};
 
@@ -10,8 +11,10 @@ use tokio::{
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "鍵生成を伴う実接続テストは nightly ワークフローで実行する"]
+#[ignore = "鍵生成を伴う実接続テストは別ワークフローで実行する"]
 async fn stalled_session_closes_after_timeout_and_cancellation() {
+    // async-opcua は Discovery 応答の URL ではなく、入力された endpoint へ
+    // セッション用 TCP を再接続する。この挙動が変わるとプロキシの前提も変わる。
     // 同じポートで Discovery とセッションを別のループバック IP へ振り分ける。
     let config = ServerConfig::default()
         .with_bind(Ipv4Addr::new(127, 0, 0, 2).into())

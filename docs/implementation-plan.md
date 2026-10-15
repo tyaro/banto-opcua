@@ -26,7 +26,8 @@ Subscription はまだない。ハブとの接続、管理 UI、Windows Service 
   付けると外部クレートでは `..Default::default()` を含む構造体リテラルが
   使えなくなるため、利用者へ移行方法を記載する。
 - #3 の実 TCP テストは鍵生成に時間がかかるため、PR の必須 CI では
-  `#[ignore]` とし、Linux / Windows の nightly と手動実行で確認する。
+  `#[ignore]` とし、接続処理を変更する PR の非必須チェックと、Linux / Windows
+  の nightly・手動実行で確認する。
 - 段階 1 が #5・#7・#9 のタグ向け受け入れテストの前提。Phase 1 の課題には
   固定ノードの値更新方法と最小限のテスト用クライアント操作も含める。
 - #6 は [banto-industrial #615](https://github.com/tyaro/banto-industrial/issues/615)

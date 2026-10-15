@@ -20,3 +20,4 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 banto-opcua-client = { path = "../banto-opcua-client" }
+tokio = { workspace = true, features = ["io-util"] }

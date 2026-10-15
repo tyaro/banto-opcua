@@ -1,5 +1,5 @@
 # 接続失敗時のイベントループ解放を、Linux と Windows の実 TCP で毎日検証する。
-# 鍵生成を含むため PR の必須 CI では実行しない（banto-opcua #3）。
+# 鍵生成を含むため ci-gate には入れず、接続処理を変更する PR と毎日実行する。
 
 name: Client connection regression
 
@@ -7,6 +7,15 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "41 18 * * *"
+  pull_request:
+    paths:
+      - "crates/banto-opcua-client/**"
+      - "crates/banto-opcua-server/tests/client_connect_failure.rs"
+      - "crates/banto-opcua-server/src/server.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/client-connect-regression.yml"
 
 jobs:
   connect:

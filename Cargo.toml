@@ -25,7 +25,7 @@ banto-opcua-core = { path = "crates/banto-opcua-core" }
 # feature だけを有効にする（両方を core へ入れない）。
 async-opcua = { version = "0.19", default-features = false }
 thiserror = "2"
-tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
 # サンプル鍵の置き場。Phase 3 の証明書ディレクトリに置き換えるまでの足場。
 tempfile = "3"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
