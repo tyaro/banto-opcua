@@ -15,7 +15,7 @@ mod config;
 mod error;
 mod server;
 
-pub use config::{ServerConfig, endpoint_url};
+pub use config::ServerConfig;
 pub use error::Error;
 pub use server::{OpcUaServer, RunningServer};
 

@@ -6,6 +6,11 @@ pub enum Error {
         "未指定アドレス（0.0.0.0 / ::）はエンドポイントに載せられません。公開するホストを advertised_host に設定してください"
     )]
     AdvertisedHostRequired,
+    /// 公開ホストにホスト名または IP アドレス以外が指定された。
+    #[error(
+        "advertised_host にはポートやパスを含まないホスト名または IP アドレスを指定してください: {0}"
+    )]
+    InvalidAdvertisedHost(String),
     /// TCP の bind、またはローカルアドレスの取得に失敗した。
     #[error("OPC UA サーバーの待受に失敗しました: {0}")]
     Bind(#[source] std::io::Error),

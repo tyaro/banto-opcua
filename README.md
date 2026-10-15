@@ -36,6 +36,8 @@ crates/
 
 ## ロードマップ（banto-industrial #201）
 
+Issue 間の依存関係と実装順は [実装計画](docs/implementation-plan.md) に記す。
+
 | 段階 | 内容 | 置き場 |
 | --- | --- | --- |
 | 足場 | クレート分割、基盤の ADR、ループバックのプロセス内疎通 | 本リポジトリ |

@@ -25,6 +25,17 @@ impl OpcUaClient {
     /// 検証全体を無効にする。Phase 1 はループバックの平文試験であり、サンプル
     /// 証明書では検証を通せない。Phase 3 TODO: 証明書検証を戻す。
     pub async fn connect(endpoint: &str) -> Result<ConnectedClient, Error> {
+        Self::connect_with_session_timeout(endpoint, Duration::from_secs(20)).await
+    }
+
+    /// エンドポイントの取得後、セッション確立を待つ時間を指定して接続する。
+    ///
+    /// 時間切れや呼び出し元によるキャンセルではイベントループを中止する。
+    /// エンドポイントの取得処理にはこの時間制限を適用しない。
+    pub async fn connect_with_session_timeout(
+        endpoint: &str,
+        session_timeout: Duration,
+    ) -> Result<ConnectedClient, Error> {
         let pki = tempfile::tempdir().map_err(Error::Pki)?;
         let mut client = ClientBuilder::new()
             .application_name("banto-opcua-client")
@@ -56,10 +67,9 @@ impl OpcUaClient {
         // 時間切れや未接続で抜けると、このガードの Drop がタスクを abort する。
         // 成功したときだけ disarm して ConnectedClient へ所有権を渡す。
         let task = AbortOnDrop::new(event_loop.spawn());
-        let connected =
-            tokio::time::timeout(Duration::from_secs(20), session.wait_for_connection())
-                .await
-                .map_err(|_| Error::Connect("接続待ちが時間切れになりました".to_owned()))?;
+        let connected = tokio::time::timeout(session_timeout, session.wait_for_connection())
+            .await
+            .map_err(|_| Error::Connect("接続待ちが時間切れになりました".to_owned()))?;
         if !connected {
             return Err(Error::Connect("セッションが確立しませんでした".to_owned()));
         }
@@ -202,11 +212,7 @@ mod tests {
         let dropped = Arc::new(AtomicBool::new(false));
         let guard = AbortOnDrop::new(pending_task(&dropped));
         drop(guard);
-        tokio::task::yield_now().await;
-        assert!(
-            dropped.load(Ordering::SeqCst),
-            "spawn したタスクが Drop で abort されず残っている"
-        );
+        wait_for_task_drop(&dropped).await;
     }
 
     #[tokio::test]
@@ -217,7 +223,17 @@ mod tests {
         assert!(!dropped.load(Ordering::SeqCst));
         assert!(!handle.is_finished());
         handle.abort();
-        tokio::task::yield_now().await;
-        assert!(dropped.load(Ordering::SeqCst));
+        assert!(handle.await.expect_err("abort されたタスク").is_cancelled());
+        wait_for_task_drop(&dropped).await;
+    }
+
+    async fn wait_for_task_drop(dropped: &Arc<AtomicBool>) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !dropped.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("spawn したタスクが中止されず残っている");
     }
 }

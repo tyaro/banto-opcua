@@ -3,7 +3,11 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 /// OPC UA サーバーの待受設定。
+///
+/// 外部クレートでは [`Default`] と `with_*` メソッドで生成する。
+/// 新しい設定項目が増えても構造体リテラルを更新せずに済む。
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ServerConfig {
     /// 待受アドレス。既定は `127.0.0.1`。
     ///
@@ -44,6 +48,55 @@ impl Default for ServerConfig {
 }
 
 impl ServerConfig {
+    /// 待受 IP アドレスを設定する。
+    pub fn with_bind(mut self, bind: IpAddr) -> Self {
+        self.bind = bind;
+        self
+    }
+
+    /// 待受ポートを設定する。
+    pub fn with_port(mut self, port: u16) -> Self {
+        self.port = port;
+        self
+    }
+
+    /// エンドポイントのパスを設定する。
+    pub fn with_endpoint_path(mut self, path: impl Into<String>) -> Self {
+        self.endpoint_path = path.into();
+        self
+    }
+
+    /// ApplicationName を設定する。
+    pub fn with_application_name(mut self, name: impl Into<String>) -> Self {
+        self.application_name = name.into();
+        self
+    }
+
+    /// ApplicationUri を設定する。
+    pub fn with_application_uri(mut self, uri: impl Into<String>) -> Self {
+        self.application_uri = uri.into();
+        self
+    }
+
+    /// ProductUri を設定する。
+    pub fn with_product_uri(mut self, uri: impl Into<String>) -> Self {
+        self.product_uri = uri.into();
+        self
+    }
+
+    /// タグの名前空間 URI を設定する。
+    pub fn with_namespace_uri(mut self, uri: impl Into<String>) -> Self {
+        self.namespace_uri = uri.into();
+        self
+    }
+
+    /// エンドポイント URL と discovery URL の公開ホストを設定する。
+    /// 形式は [`crate::OpcUaServer::start`] で検証する。
+    pub fn with_advertised_host(mut self, host: impl Into<String>) -> Self {
+        self.advertised_host = Some(host.into());
+        self
+    }
+
     /// 空や空白だけの `advertised_host` は未設定として扱う。
     pub(crate) fn explicit_advertised_host(&self) -> Option<&str> {
         self.advertised_host
@@ -74,16 +127,38 @@ impl ServerConfig {
     }
 }
 
-/// `opc.tcp://` URL を組み立てる。IPv6 は括弧で囲む。
-///
-/// `advertised_host` を反映するのは [`ServerConfig::endpoint_url`]。
-pub fn endpoint_url(bound: SocketAddr, endpoint_path: &str) -> String {
-    format!(
-        "opc.tcp://{}:{}{}",
-        format_endpoint_host(&bound.ip().to_string()),
-        bound.port(),
-        normalize_endpoint_path(endpoint_path)
-    )
+/// `advertised_host` が単体のホスト名または IP アドレスか。
+/// URL、ポート、パス、空白、IPv6 の不完全な括弧を含めない。
+pub(crate) fn valid_advertised_host(host: &str) -> bool {
+    if host.is_empty() || host != host.trim() {
+        return false;
+    }
+    if let Some(bare) = host.strip_prefix('[') {
+        return bare
+            .strip_suffix(']')
+            .is_some_and(|ip| ip.parse::<std::net::Ipv6Addr>().is_ok());
+    }
+    if host.parse::<IpAddr>().is_ok() {
+        return true;
+    }
+    if host.len() > 253 || !host.is_ascii() {
+        return false;
+    }
+    host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && label
+                .as_bytes()
+                .last()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    })
 }
 
 /// ホスト文字列をエンドポイント URL 用に整える。IPv6 は `[..]` で囲む。
@@ -156,10 +231,15 @@ mod tests {
     #[test]
     fn endpoint_url_uses_the_bound_port() {
         let bound = SocketAddr::from((Ipv4Addr::LOCALHOST, 4840));
-        assert_eq!(endpoint_url(bound, "/"), "opc.tcp://127.0.0.1:4840/");
+        let config = ServerConfig::default();
+        assert_eq!(config.endpoint_url(bound), "opc.tcp://127.0.0.1:4840/");
         let ephemeral = SocketAddr::from((Ipv4Addr::LOCALHOST, 49152));
         assert_eq!(
-            endpoint_url(ephemeral, "banto"),
+            ServerConfig {
+                endpoint_path: "banto".to_owned(),
+                ..config
+            }
+            .endpoint_url(ephemeral),
             "opc.tcp://127.0.0.1:49152/banto"
         );
     }
@@ -167,14 +247,23 @@ mod tests {
     #[test]
     fn endpoint_path_is_normalized_in_one_place() {
         let bound = SocketAddr::from((Ipv4Addr::LOCALHOST, 4840));
-        assert_eq!(endpoint_url(bound, "banto"), endpoint_url(bound, "/banto"));
-        assert_eq!(endpoint_url(bound, ""), endpoint_url(bound, "/"));
+        let mut config = ServerConfig::default().with_endpoint_path("banto");
+        let plain = config.endpoint_url(bound);
+        config.endpoint_path = "/banto".to_owned();
+        assert_eq!(plain, config.endpoint_url(bound));
+        config.endpoint_path = "".to_owned();
+        let empty = config.endpoint_url(bound);
+        config.endpoint_path = "/".to_owned();
+        assert_eq!(empty, config.endpoint_url(bound));
     }
 
     #[test]
     fn ipv6_endpoint_url_is_bracketed() {
         let bound = SocketAddr::from((Ipv6Addr::LOCALHOST, 4840));
-        assert_eq!(endpoint_url(bound, "/"), "opc.tcp://[::1]:4840/");
+        assert_eq!(
+            ServerConfig::default().endpoint_url(bound),
+            "opc.tcp://[::1]:4840/"
+        );
     }
 
     #[test]
@@ -210,5 +299,30 @@ mod tests {
         assert!(host_is_loopback("[::1]"));
         assert!(host_is_loopback("localhost"));
         assert!(!host_is_loopback("192.0.2.10"));
+    }
+
+    #[test]
+    fn advertised_host_accepts_hostnames_and_ip_addresses_only() {
+        for host in ["localhost", "plc.example.com", "192.0.2.10", "::1", "[::1]"] {
+            assert!(valid_advertised_host(host), "{host}");
+        }
+        for host in [
+            "",
+            " plc.example.com",
+            "plc.example.com ",
+            "a b",
+            "opc.tcp://host",
+            "host:4840",
+            "host/path",
+            "[::1",
+            "[host]",
+            "bad_host",
+            "-host",
+            "host-",
+            "host..example",
+            "host:foo",
+        ] {
+            assert!(!valid_advertised_host(host), "{host}");
+        }
     }
 }
