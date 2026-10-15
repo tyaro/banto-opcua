@@ -126,7 +126,7 @@ banto の ADR-0011 に合わせ、配布は git タグを予定する。crates.i
 1. **NodeId。** 外部名 `{connection}.{group}.{tag}` を使う。`tag_id` は削除して作り直すと変わるため使わない。2026-09-30 の banto-industrial のオーナー決定に準拠する。core の `NodeId::external_name` がこの形を作る。数値 NodeId は標準ノード用に残す。
 2. **DataType。** 収集済みの数値は Double に固定する。`bit` は Boolean、`string` は周期収集の対象外なので値を公開しない。Int16 や Float には分けない。
 3. **品質と値。** Bad の細分化は後回しにする。有効な値では Good は Good、Stale は `UncertainLastUsableValue`（0x40900000）として最後の値を保持する。Bad 品質や欠損値は値なし・汎用 `Bad`（0x80000000）。Double の NaN / ±Inf、Boolean に写す bit の 0 / 1 以外も値なし・汎用 `Bad` とし、丸めない。Stale でも値が無効なら Bad を優先する。bit の `-0.0` は `0.0` と同じ false として扱う。core の `map_current_value` がこの契約を実装する。REST / WS / gRPC と共通化するかは [banto-industrial #615](https://github.com/tyaro/banto-industrial/issues/615) で検討中。
-4. **時刻。** Good の SourceTimestamp は採取時刻、Bad と Stale は品質を認識した時刻（または実際に復旧を試みた時刻）、不明なときは null。別の時刻や Read 時の現在時刻では補わない。core の `SampleTimestamps::for_quality` に写像を実装した。固定タグの反復 Read でも SourceTimestamp は変わらない。ハブの実データへの接続には [banto-industrial #614](https://github.com/tyaro/banto-industrial/issues/614) の時刻提供が必要。
+4. **時刻。** Good の SourceTimestamp は採取時刻、Bad と Stale は品質を認識した時刻（または実際に復旧を試みた時刻）、不明なときは null。別の時刻や Read 時の現在時刻では補わない。core の `SampleTimestamps::for_quality` に写像を実装した。引数の品質はハブの入力品質であり、Good の無効値が Bad に写った場合は採取時刻を異常の観測時刻とみなす。固定タグの既存経路では、反復 Read でも保存済み SourceTimestamp が変わらないことを確認した。ハブの実データへの接続には [banto-industrial #614](https://github.com/tyaro/banto-industrial/issues/614) の時刻提供が必要。
 5. **ポート。** 既定は 4840。設定で変更できる。
 6. **LAN 公開。** 条件付きで許可する。`advertised_host` を用意し、未指定アドレス（`0.0.0.0` / `::`）でそれが未設定なら起動はエラーになる。ループバック以外は明示したときだけ公開し、そのときは警告ログを出す。既定の bind は `127.0.0.1`。
 7. **edition。** 2024 のまま。

@@ -39,7 +39,8 @@ PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read �
 - #8 は [banto-industrial #614](https://github.com/tyaro/banto-industrial/issues/614)
   が共通読み取り層へ値の採取時刻と品質を認識した時刻を追加してから結合する。
   core の写像は Good に採取時刻、Bad / Stale に認識時刻、不明なら null を返す。
-  Read のたびに SourceTimestamp を現在時刻へ差し替えない。
+  Read のたびに SourceTimestamp を現在時刻へ差し替えない。PLC タグと Hub ソースの
+  Stale の違いは core に渡す品質認識時刻に表れ、#614 の結合時に実データで検証する。
 - #7 は async-opcua 0.19 のフィルタ未指定時の値だけの比較に阻まれる。
   `notify_data_change` を呼ぶだけでは品質だけの変化は通らない。upstream へ
   再現例を報告し、MonitoredItem の既定フィルタを変える拡張点か upstream の

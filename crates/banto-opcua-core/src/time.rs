@@ -36,6 +36,10 @@ impl SampleTimestamps {
     /// Good は値の採取時刻、Bad / Stale は品質を認識した時刻（または実際に
     /// 復旧を試みた時刻）を選ぶ。選んだ時刻が不明なら、もう一方や `server` へ
     /// フォールバックせず `None` にする。
+    /// `quality` は [`crate::map_current_value`] に渡したのと同じハブ品質であり、
+    /// 写像後の StatusCode から作り直さない。Good の無効値が Bad に写る場合は
+    /// その採取時刻を異常の観測時刻とみなす。採取時刻がなければ `None`。
+    /// PLC と Hub ソースの Stale の違いは、呼び出し側が渡す `quality_at` に表れる。
     /// 呼び出し側は品質を認識した時刻を Read のたびに作り直してはならない。
     pub const fn for_quality(
         quality: Quality,
@@ -83,6 +87,8 @@ fn opcua_ticks_from_unix_nanos(nanos_since_unix: u128) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
+    use crate::{DataType, StatusCode, map_current_value};
 
     use super::*;
 
@@ -158,6 +164,30 @@ mod tests {
         );
         assert_eq!(first.source_ticks(), second.source_ticks());
         assert_ne!(first.server_ticks(), second.server_ticks());
+    }
+
+    #[test]
+    fn invalid_good_value_uses_observation_time_not_unrelated_quality_time() {
+        let sampled_at = UNIX_EPOCH + Duration::from_secs(1);
+        let quality_at = UNIX_EPOCH + Duration::from_secs(2);
+        let server = UNIX_EPOCH + Duration::from_secs(3);
+        let mapped = map_current_value(DataType::Double, Some(f64::NAN), Quality::Good);
+        assert_eq!(mapped.status, StatusCode::BAD);
+        assert_eq!(mapped.value, None);
+
+        let timestamps = SampleTimestamps::for_quality(
+            Quality::Good,
+            Some(sampled_at),
+            Some(quality_at),
+            server,
+        );
+        assert_eq!(timestamps.source, Some(sampled_at));
+        assert_ne!(timestamps.source, Some(quality_at));
+
+        let missing = map_current_value(DataType::Double, None, Quality::Good);
+        assert_eq!(missing.status, StatusCode::BAD);
+        let unknown = SampleTimestamps::for_quality(Quality::Good, None, Some(quality_at), server);
+        assert_eq!(unknown.source, None);
     }
 
     #[test]

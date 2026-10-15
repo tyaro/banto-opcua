@@ -204,7 +204,8 @@ async fn fixed_tags_can_be_browsed_read_and_subscribed() {
     assert_eq!(updated.status(), StatusCode::Good);
     assert!(updated.source_timestamp.is_some());
     assert!(updated.server_timestamp.is_some());
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    // Read 時に時刻を作り直す実装なら差が出るよう、時計の粒度を超えて待つ。
+    tokio::time::sleep(Duration::from_millis(50)).await;
     let repeated = read_data_value(&session, &running, AttributeId::Value).await;
     assert_eq!(repeated.value, updated.value);
     assert_eq!(repeated.status(), updated.status());
