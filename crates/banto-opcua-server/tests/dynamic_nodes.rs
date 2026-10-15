@@ -8,8 +8,8 @@ use opcua::{
     crypto::SecurityPolicy,
     types::{
         AttributeId, BrowseDescription, BrowseDirection, DataValue, MessageSecurityMode,
-        MonitoredItemCreateRequest, NodeId, ObjectId, ReadValueId, ReferenceTypeId, StatusCode,
-        TimestampsToReturn, UserTokenPolicy, Variant,
+        MonitoredItemCreateRequest, NodeId, NumericRange, ObjectId, ReadValueId, ReferenceTypeId,
+        StatusCode, TimestampsToReturn, UserTokenPolicy, Variant,
     },
 };
 use tokio::sync::mpsc;
@@ -105,6 +105,40 @@ async fn deleted_node_notifies_and_reappearing_node_resumes_the_same_subscriptio
     assert_eq!(items.len(), 1);
     assert_change(&mut receiver, Some(Variant::Double(10.0)), StatusCode::Good).await;
 
+    // 範囲指定を持つ MonitoredItem に、再登録時も通常のサンプリング結果を送る。
+    let (ranged_sender, mut ranged_receiver) = mpsc::unbounded_channel();
+    let ranged_subscription = session
+        .create_subscription(
+            Duration::from_millis(100),
+            30,
+            10,
+            0,
+            0,
+            true,
+            DataChangeCallback::new(move |value, _item| {
+                let _ = ranged_sender.send(value);
+            }),
+        )
+        .await
+        .expect("範囲指定の購読を作る");
+    let mut ranged_request: MonitoredItemCreateRequest = speed.clone().into();
+    ranged_request.item_to_monitor.index_range = NumericRange::Index(0);
+    let ranged_items = session
+        .create_monitored_items(
+            ranged_subscription,
+            TimestampsToReturn::Both,
+            vec![ranged_request],
+        )
+        .await
+        .expect("範囲指定の監視項目を作る");
+    assert_eq!(ranged_items.len(), 1);
+    assert_change(
+        &mut ranged_receiver,
+        None,
+        StatusCode::BadIndexRangeDataMismatch,
+    )
+    .await;
+
     server
         .remove_tag("PLC2", "Cell1", "Speed")
         .expect("タグを削除する");
@@ -112,6 +146,12 @@ async fn deleted_node_notifies_and_reappearing_node_resumes_the_same_subscriptio
         &mut receiver,
         Some(Variant::Empty),
         StatusCode::BadNodeIdUnknown,
+    )
+    .await;
+    assert_change(
+        &mut ranged_receiver,
+        Some(Variant::Empty),
+        StatusCode::BadIndexRangeDataMismatch,
     )
     .await;
     assert_eq!(
@@ -128,6 +168,12 @@ async fn deleted_node_notifies_and_reappearing_node_resumes_the_same_subscriptio
         .add_tag("PLC2", "Cell1", "Speed", MappedValue::Double(11.0))
         .expect("同じ NodeId を再登録する");
     assert_change(&mut receiver, Some(Variant::Double(11.0)), StatusCode::Good).await;
+    assert_change(
+        &mut ranged_receiver,
+        None,
+        StatusCode::BadIndexRangeDataMismatch,
+    )
+    .await;
     assert_eq!(
         read_value(&session, &speed).await.value,
         Some(Variant::Double(11.0))
@@ -141,6 +187,12 @@ async fn deleted_node_notifies_and_reappearing_node_resumes_the_same_subscriptio
         &mut receiver,
         Some(Variant::Empty),
         StatusCode::BadNodeIdUnknown,
+    )
+    .await;
+    assert_change(
+        &mut ranged_receiver,
+        Some(Variant::Empty),
+        StatusCode::BadIndexRangeDataMismatch,
     )
     .await;
     server
