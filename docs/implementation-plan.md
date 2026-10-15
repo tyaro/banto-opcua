@@ -25,6 +25,8 @@ Subscription はまだない。ハブとの接続、管理 UI、Windows Service 
   `Default` と `with_*` メソッドを使う方式を採る。`#[non_exhaustive]` を
   付けると外部クレートでは `..Default::default()` を含む構造体リテラルが
   使えなくなるため、利用者へ移行方法を記載する。
+- #3 の実 TCP テストは鍵生成に時間がかかるため、PR の必須 CI では
+  `#[ignore]` とし、Linux / Windows の nightly と手動実行で確認する。
 - 段階 1 が #5・#7・#9 のタグ向け受け入れテストの前提。Phase 1 の課題には
   固定ノードの値更新方法と最小限のテスト用クライアント操作も含める。
 - #6 は [banto-industrial #615](https://github.com/tyaro/banto-industrial/issues/615)

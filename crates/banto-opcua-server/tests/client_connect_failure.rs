@@ -10,6 +10,7 @@ use tokio::{
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "鍵生成を伴う実接続テストは nightly ワークフローで実行する"]
 async fn stalled_session_closes_after_timeout_and_cancellation() {
     // 同じポートで Discovery とセッションを別のループバック IP へ振り分ける。
     let config = ServerConfig::default()
