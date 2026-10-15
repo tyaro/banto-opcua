@@ -204,6 +204,11 @@ async fn fixed_tags_can_be_browsed_read_and_subscribed() {
     assert_eq!(updated.status(), StatusCode::Good);
     assert!(updated.source_timestamp.is_some());
     assert!(updated.server_timestamp.is_some());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let repeated = read_data_value(&session, &running, AttributeId::Value).await;
+    assert_eq!(repeated.value, updated.value);
+    assert_eq!(repeated.status(), updated.status());
+    assert_eq!(repeated.source_timestamp, updated.source_timestamp);
 
     session.disconnect().await.expect("クライアントを切断する");
     task.abort();

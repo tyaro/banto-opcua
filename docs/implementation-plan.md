@@ -7,8 +7,9 @@
 ## 現在地と完了の単位
 
 PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read までを実装した。
-段階 0 は PR #10、段階 1 の固定タグは PR #12 で完了した。段階 2 は
-[#6](https://github.com/tyaro/banto-opcua/issues/6) の core 写像から進める。
+段階 0 は PR #10、段階 1 の固定タグは PR #12 で完了した。段階 2 の
+[#6](https://github.com/tyaro/banto-opcua/issues/6) の core 写像は PR #13 で完了。
+次は [#8](https://github.com/tyaro/banto-opcua/issues/8) の core 写像を進める。
 ハブとの接続、管理 UI、Windows Service は未実装。
 以下は依存関係に沿った作業順であり、各段階を独立した PR で検証する。
 
