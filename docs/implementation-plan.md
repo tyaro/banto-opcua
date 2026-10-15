@@ -7,8 +7,9 @@
 ## 現在地と完了の単位
 
 PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read までを実装した。
-段階 0 は PR #10、段階 1 の固定タグは PR #12 で完了した。段階 2 は
-[#6](https://github.com/tyaro/banto-opcua/issues/6) の core 写像から進める。
+段階 0 は PR #10、段階 1 の固定タグは PR #12 で完了した。段階 2 の
+[#6](https://github.com/tyaro/banto-opcua/issues/6) の core 写像は PR #13 で完了。
+次は [#8](https://github.com/tyaro/banto-opcua/issues/8) の core 写像を進める。
 ハブとの接続、管理 UI、Windows Service は未実装。
 以下は依存関係に沿った作業順であり、各段階を独立した PR で検証する。
 
@@ -38,7 +39,8 @@ PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read �
 - #8 は [banto-industrial #614](https://github.com/tyaro/banto-industrial/issues/614)
   が共通読み取り層へ値の採取時刻と品質を認識した時刻を追加してから結合する。
   core の写像は Good に採取時刻、Bad / Stale に認識時刻、不明なら null を返す。
-  Read のたびに SourceTimestamp を現在時刻へ差し替えない。
+  Read のたびに SourceTimestamp を現在時刻へ差し替えない。PLC タグと Hub ソースの
+  Stale の違いは core に渡す品質認識時刻に表れ、#614 の結合時に実データで検証する。
 - #7 は async-opcua 0.19 のフィルタ未指定時の値だけの比較に阻まれる。
   `notify_data_change` を呼ぶだけでは品質だけの変化は通らない。upstream へ
   再現例を報告し、MonitoredItem の既定フィルタを変える拡張点か upstream の

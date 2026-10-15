@@ -15,6 +15,7 @@
 - 接続待ちの時間切れとキャンセルで TCP 接続が閉じることを確かめる、対象 PR と nightly の回帰テスト。
 - Phase 1 の固定タグ `Speed` / `Running`。Browse / Read / Subscription と試験用の値更新 API、UaExpert 用のサンプルサーバー。
 - core の現在値・品質の写像。非有限値、0 / 1 以外の bit、欠損値を値なし・汎用 Bad として扱う。
+- core の品質別 SourceTimestamp 写像。時刻不明は null のままにし、固定タグの反復 Read でも採取時刻を保持する。
 
 ### 修正
 

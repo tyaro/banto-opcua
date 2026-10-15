@@ -3,12 +3,15 @@
 //! OPC UA DateTime は 1601-01-01 UTC からの 100 ナノ秒刻み（符号付き 64 ビット）。
 //! `chrono` は引かない（banto ADR-0002 の自前日付変換と同じ理由）。
 //!
-//! 時刻の方針（2026-10-15 オーナー決定。実装は Phase 2）:
-//! Good の SourceTimestamp は採取時刻、Bad / Stale は品質を認識した時刻、
-//! 不明なら null。ハブが時刻を渡せるようになるまで、このクレートは渡された
-//! [`SystemTime`] を変換するだけで、現在時刻では埋めない。
+//! 時刻の方針（2026-10-15 オーナー決定）:
+//! Good の SourceTimestamp は採取時刻、Bad / Stale は品質を認識した時刻
+//! （または実際に復旧を試みた時刻）。不明なら null。core は渡された時刻を
+//! 選択・変換するが、ハブから必要な時刻を受け取る結合は banto-industrial #614
+//! の対応後に行う。現在時刻では埋めない。
 
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::Quality;
 
 /// Unix エポックを OPC UA の 100 ナノ秒刻みで表した値。
 pub const UNIX_EPOCH_TICKS: i64 = 11_644_473_600 * 10_000_000;
@@ -25,6 +28,29 @@ pub struct SampleTimestamps {
 impl SampleTimestamps {
     /// 採取時刻とサーバー時刻から作る。採取時刻を今で埋めない。
     pub const fn new(source: Option<SystemTime>, server: SystemTime) -> Self {
+        Self { source, server }
+    }
+
+    /// 品質に応じた SourceTimestamp と、公開時の ServerTimestamp を組み立てる。
+    ///
+    /// Good は値の採取時刻、Bad / Stale は品質を認識した時刻（または実際に
+    /// 復旧を試みた時刻）を選ぶ。選んだ時刻が不明なら、もう一方や `server` へ
+    /// フォールバックせず `None` にする。
+    /// `quality` は [`crate::map_current_value`] に渡したのと同じハブ品質であり、
+    /// 写像後の StatusCode から作り直さない。Good の無効値が Bad に写る場合は
+    /// その採取時刻を異常の観測時刻とみなす。採取時刻がなければ `None`。
+    /// PLC と Hub ソースの Stale の違いは、呼び出し側が渡す `quality_at` に表れる。
+    /// 呼び出し側は品質を認識した時刻を Read のたびに作り直してはならない。
+    pub const fn for_quality(
+        quality: Quality,
+        sampled_at: Option<SystemTime>,
+        quality_at: Option<SystemTime>,
+        server: SystemTime,
+    ) -> Self {
+        let source = match quality {
+            Quality::Good => sampled_at,
+            Quality::Bad | Quality::Stale => quality_at,
+        };
         Self { source, server }
     }
 
@@ -62,6 +88,8 @@ fn opcua_ticks_from_unix_nanos(nanos_since_unix: u128) -> Option<i64> {
 mod tests {
     use std::time::Duration;
 
+    use crate::{DataType, StatusCode, map_current_value};
+
     use super::*;
 
     #[test]
@@ -86,6 +114,80 @@ mod tests {
         let sample = SampleTimestamps::new(None, UNIX_EPOCH);
         assert_eq!(sample.source_ticks(), None);
         assert_eq!(sample.server_ticks(), Some(UNIX_EPOCH_TICKS));
+    }
+
+    #[test]
+    fn quality_selects_sample_or_recognition_time_without_fallback() {
+        let sampled_at = UNIX_EPOCH + Duration::from_secs(1);
+        let quality_at = UNIX_EPOCH + Duration::from_secs(2);
+        let server = UNIX_EPOCH + Duration::from_secs(3);
+        for (quality, expected) in [
+            (Quality::Good, sampled_at),
+            (Quality::Bad, quality_at),
+            (Quality::Stale, quality_at),
+        ] {
+            let timestamps =
+                SampleTimestamps::for_quality(quality, Some(sampled_at), Some(quality_at), server);
+            assert_eq!(timestamps.source, Some(expected), "{quality:?}");
+            assert_eq!(timestamps.server, server, "{quality:?}");
+        }
+        assert_eq!(
+            SampleTimestamps::for_quality(Quality::Good, None, Some(quality_at), server)
+                .source_ticks(),
+            None
+        );
+        for quality in [Quality::Bad, Quality::Stale] {
+            assert_eq!(
+                SampleTimestamps::for_quality(quality, Some(sampled_at), None, server)
+                    .source_ticks(),
+                None,
+                "{quality:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn changing_server_time_does_not_retimestamp_stale_source() {
+        let sampled_at = UNIX_EPOCH + Duration::from_secs(1);
+        let quality_at = UNIX_EPOCH + Duration::from_secs(2);
+        let first = SampleTimestamps::for_quality(
+            Quality::Stale,
+            Some(sampled_at),
+            Some(quality_at),
+            UNIX_EPOCH + Duration::from_secs(3),
+        );
+        let second = SampleTimestamps::for_quality(
+            Quality::Stale,
+            Some(sampled_at),
+            Some(quality_at),
+            UNIX_EPOCH + Duration::from_secs(4),
+        );
+        assert_eq!(first.source_ticks(), second.source_ticks());
+        assert_ne!(first.server_ticks(), second.server_ticks());
+    }
+
+    #[test]
+    fn invalid_good_value_uses_observation_time_not_unrelated_quality_time() {
+        let sampled_at = UNIX_EPOCH + Duration::from_secs(1);
+        let quality_at = UNIX_EPOCH + Duration::from_secs(2);
+        let server = UNIX_EPOCH + Duration::from_secs(3);
+        let mapped = map_current_value(DataType::Double, Some(f64::NAN), Quality::Good);
+        assert_eq!(mapped.status, StatusCode::BAD);
+        assert_eq!(mapped.value, None);
+
+        let timestamps = SampleTimestamps::for_quality(
+            Quality::Good,
+            Some(sampled_at),
+            Some(quality_at),
+            server,
+        );
+        assert_eq!(timestamps.source, Some(sampled_at));
+        assert_ne!(timestamps.source, Some(quality_at));
+
+        let missing = map_current_value(DataType::Double, None, Quality::Good);
+        assert_eq!(missing.status, StatusCode::BAD);
+        let unknown = SampleTimestamps::for_quality(Quality::Good, None, Some(quality_at), server);
+        assert_eq!(unknown.source, None);
     }
 
     #[test]
