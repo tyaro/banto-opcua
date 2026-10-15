@@ -62,6 +62,7 @@ PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read �
   `BadNodeIdUnknown` を流してからノードを外し、MonitoredItem は消さない。
   同じ NodeId の再登録と、リネーム後の新しい NodeId を実 Subscription と
   Browse / Read で確かめる。追加 API の初期値は試験用に登録時刻を付ける。
+  空になった接続・グループのフォルダーは、同じ階層への再登録に備えて残す。
   ハブのタグレジストリと実データの時刻との結合は #201 で行う。
 - #9 の Python 経路は段階 1 の後に先行できる。opc-plc 経路には、現状の
   `ServerStatus/State` 専用 Read より広い、NodeId を指定する最小限の

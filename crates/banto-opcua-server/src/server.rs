@@ -262,7 +262,16 @@ impl Drop for RunningServer {
 
 #[cfg(test)]
 mod tests {
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::{
+        net::{IpAddr, Ipv4Addr},
+        sync::mpsc,
+        time::Duration,
+    };
+
+    use opcua::{
+        server::address_space::NodeType,
+        types::{DataEncoding, NodeId, NumericRange, TimestampsToReturn},
+    };
 
     use super::*;
 
@@ -346,5 +355,73 @@ mod tests {
                     .expect_err("名前空間 URI の衝突を拒否する");
             assert!(matches!(err, Error::InvalidNamespaceUri(_)), "{uri}: {err}");
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn initial_value_cannot_overwrite_a_recreated_node() {
+        let server = OpcUaServer::start(ServerConfig::default().with_port(0))
+            .await
+            .expect("サーバーを起動する");
+        let (inserted_tx, inserted_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let (removing_tx, removing_rx) = mpsc::channel();
+
+        std::thread::scope(|scope| {
+            let first_server = &server;
+            let first = scope.spawn(move || {
+                first_server.fixed_tags.add_tag_with(
+                    &first_server.handle,
+                    "PLC2",
+                    "Cell1",
+                    "Speed",
+                    Variant::Double(10.0),
+                    || {
+                        inserted_tx.send(()).expect("挿入を知らせる");
+                        resume_rx
+                            .recv_timeout(Duration::from_secs(5))
+                            .expect("初回の追加を再開する");
+                    },
+                )
+            });
+            inserted_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("初回の挿入を待つ");
+            let second_server = &server;
+            let second = scope.spawn(move || {
+                removing_tx.send(()).expect("削除開始を知らせる");
+                second_server
+                    .remove_tag("PLC2", "Cell1", "Speed")
+                    .expect("旧タグを削除する");
+                second_server
+                    .add_tag("PLC2", "Cell1", "Speed", MappedValue::Double(20.0))
+                    .expect("同じ NodeId を再登録する");
+            });
+            removing_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("削除開始を待つ");
+            resume_tx.send(()).expect("初回の追加を再開する");
+            first
+                .join()
+                .expect("初回の追加スレッド")
+                .expect("初回の追加");
+            second.join().expect("再登録スレッド");
+        });
+
+        let id = NodeId::new(server.namespace_index(), "PLC2.Cell1.Speed");
+        let address_space = server.fixed_tags.manager.address_space();
+        {
+            let space = address_space.read();
+            let Some(NodeType::Variable(variable)) = space.find(&id) else {
+                panic!("再登録した変数が存在する");
+            };
+            let value = variable.value(
+                TimestampsToReturn::Both,
+                &NumericRange::None,
+                &DataEncoding::default(),
+                0.0,
+            );
+            assert_eq!(value.value, Some(Variant::Double(20.0)));
+        }
+        server.shutdown().await.expect("サーバーを停止する");
     }
 }

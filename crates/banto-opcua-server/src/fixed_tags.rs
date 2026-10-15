@@ -1,5 +1,6 @@
 //! Phase 1 の固定タグと、Phase 2 の追加・削除可能なタグ。
 //! ハブのタグレジストリとの結合は banto-industrial #201 で行う。
+//! タグ削除後も接続・グループのフォルダーは残す。再登録時に同じ階層を使う。
 
 use std::sync::Arc;
 
@@ -19,6 +20,7 @@ use opcua::{
 use crate::Error;
 
 const MANAGER_NAME: &str = "banto-fixed-tags";
+const ROOT_NAME: &str = "Banto";
 
 /// Phase 1 の固定ノードを扱う node manager を作る。
 pub(crate) fn node_manager(
@@ -36,7 +38,7 @@ pub(crate) fn node_manager(
 /// 固定タグのノード ID と値更新に必要なハンドル。
 pub(crate) struct FixedTags {
     pub namespace_index: u16,
-    manager: Arc<SimpleNodeManager>,
+    pub(crate) manager: Arc<SimpleNodeManager>,
 }
 
 impl FixedTags {
@@ -49,13 +51,13 @@ impl FixedTags {
             .node_managers()
             .get_by_name::<SimpleNodeManager>(MANAGER_NAME)
             .ok_or_else(|| Error::Build("固定タグの node manager がありません".to_owned()))?;
-        let banto = NodeId::new(namespace_index, "Banto");
+        let banto = NodeId::new(namespace_index, ROOT_NAME);
         let plc = NodeId::new(namespace_index, "PLC1");
         let line = NodeId::new(namespace_index, "PLC1.Line1");
         {
             let mut space = manager.address_space().write();
             for (id, name, parent) in [
-                (&banto, "Banto", ObjectId::ObjectsFolder.into()),
+                (&banto, ROOT_NAME, ObjectId::ObjectsFolder.into()),
                 (&plc, "PLC1", banto.clone()),
                 (&line, "Line1", plc.clone()),
             ] {
@@ -113,60 +115,69 @@ impl FixedTags {
         tag: &str,
         value: Variant,
     ) -> Result<(), Error> {
+        self.add_tag_with(handle, connection, group, tag, value, || {})
+    }
+
+    /// `after_insert` は write ロック中の競合順序を試験するためのフック。
+    pub(crate) fn add_tag_with(
+        &self,
+        handle: &ServerHandle,
+        connection: &str,
+        group: &str,
+        tag: &str,
+        value: Variant,
+        after_insert: impl FnOnce(),
+    ) -> Result<(), Error> {
         validate_path(connection, group, tag)?;
         let connection_id = NodeId::new(self.namespace_index, connection);
         let group_id = NodeId::new(self.namespace_index, format!("{connection}.{group}"));
         let tag_id = NodeId::new(self.namespace_index, format!("{connection}.{group}.{tag}"));
-        {
-            let mut space = self.manager.address_space().write();
-            if space.node_exists(&tag_id) {
-                return Err(Error::TagUpdate(format!("タグ {tag_id} は登録済みです")));
-            }
-            for (id, name, parent) in [
-                (
-                    &connection_id,
-                    connection,
-                    NodeId::new(self.namespace_index, "Banto"),
-                ),
-                (&group_id, group, connection_id.clone()),
-            ] {
-                if !space.node_exists(id)
-                    && !ObjectBuilder::new(id, QualifiedName::new(self.namespace_index, name), name)
-                        .is_folder()
-                        .organized_by(parent)
-                        .insert(&mut *space)
-                {
-                    return Err(Error::TagUpdate(format!(
-                        "フォルダー {id} を登録できません"
-                    )));
-                }
-            }
-            if !space.insert::<_, NodeId>(
-                Variable::new(
-                    &tag_id,
-                    QualifiedName::new(self.namespace_index, tag),
-                    tag,
-                    value.clone(),
-                ),
-                None,
-            ) {
-                return Err(Error::TagUpdate(format!("タグ {tag_id} を登録できません")));
-            }
-            space.insert_reference(&group_id, &tag_id, ReferenceTypeId::HasComponent);
-            space.insert_reference(
-                &tag_id,
-                &VariableTypeId::BaseDataVariableType.into(),
-                ReferenceTypeId::HasTypeDefinition,
-            );
+        let mut space = self.manager.address_space().write();
+        if space.node_exists(&tag_id) {
+            return Err(Error::TagUpdate(format!("タグ {tag_id} は登録済みです")));
         }
-        self.manager
-            .set_value(
-                handle.subscriptions(),
-                &tag_id,
-                None,
-                DataValue::new_now(value),
-            )
-            .map_err(|status| Error::TagUpdate(status.to_string()))
+        for (id, name, parent) in [
+            (
+                &connection_id,
+                connection,
+                NodeId::new(self.namespace_index, ROOT_NAME),
+            ),
+            (&group_id, group, connection_id.clone()),
+        ] {
+            if !space.node_exists(id)
+                && !ObjectBuilder::new(id, QualifiedName::new(self.namespace_index, name), name)
+                    .is_folder()
+                    .organized_by(parent)
+                    .insert(&mut *space)
+            {
+                return Err(Error::TagUpdate(format!(
+                    "フォルダー {id} を登録できません"
+                )));
+            }
+        }
+        let initial = DataValue::new_now(value.clone());
+        let mut variable = Variable::new(
+            &tag_id,
+            QualifiedName::new(self.namespace_index, tag),
+            tag,
+            value,
+        );
+        variable.set_data_value(initial.clone());
+        if !space.insert::<_, NodeId>(variable, None) {
+            return Err(Error::TagUpdate(format!("タグ {tag_id} を登録できません")));
+        }
+        space.insert_reference(&group_id, &tag_id, ReferenceTypeId::HasComponent);
+        space.insert_reference(
+            &tag_id,
+            &VariableTypeId::BaseDataVariableType.into(),
+            ReferenceTypeId::HasTypeDefinition,
+        );
+        after_insert();
+        // 初期値の保存と通知まで write ロックで排他し、削除・再登録との逆転を防ぐ。
+        handle
+            .subscriptions()
+            .notify_data_change([(initial, &tag_id, AttributeId::Value)].into_iter());
+        Ok(())
     }
 
     /// 削除通知を流してからアドレス空間から外す。MonitoredItem は保持する。
@@ -204,7 +215,7 @@ impl FixedTags {
 }
 
 fn validate_path(connection: &str, group: &str, tag: &str) -> Result<(), Error> {
-    if connection == "Banto" {
+    if connection == ROOT_NAME {
         return Err(Error::TagUpdate(
             "Banto はルートフォルダーの予約名です".to_owned(),
         ));
