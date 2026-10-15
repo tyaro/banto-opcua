@@ -27,6 +27,12 @@ ADR-0002 は「依存を足さない」を既定にしつつ、自前実装が�
 
 **プロトコル実装の基盤に [async-opcua](https://github.com/FreeOpcUa/async-opcua) 0.19（MPL-2.0）を採用する。**
 
+フィルタ未指定の購読で品質変更を通知する [upstream PR #274](https://github.com/FreeOpcUa/async-opcua/pull/274)
+は 0.19.0 公開後にマージされた。#7 の実 Subscription 試験を通すため、修正を含む
+`1ba60ed14177a2590ee75526af40602987a14123` を一時的に固定する。
+次の公開版に修正が入ったら crates.io 依存へ戻す。このコミットには 0.19.0 以降の
+別の upstream 変更も含まれるため、依存更新時は回帰テストと cargo-deny を実行する。
+
 - `banto-opcua-server` は feature `server`（標準アドレス空間を含む）だけを有効にする。
 - `banto-opcua-client` は feature `client` だけを有効にする。
 - `banto-opcua-core` は async-opcua に依存しない。値・StatusCode・時刻・ノードの語彙は MIT の型として置き、境界で変換する。外部の型を公開 API に漏らさない。

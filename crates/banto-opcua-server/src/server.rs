@@ -6,9 +6,11 @@ use std::net::SocketAddr;
 
 use opcua::{
     server::{ANONYMOUS_USER_TOKEN_ID, ServerBuilder, ServerEndpoint, ServerHandle},
-    types::DataValue,
+    types::{DataValue, DateTime, Variant},
 };
 use tokio::{net::TcpListener, task::JoinHandle};
+
+use banto_opcua_core::{DataType, MappedValue, Quality, map_current_value};
 
 use crate::{
     Error, ServerConfig,
@@ -149,6 +151,33 @@ impl RunningServer {
         }
         self.fixed_tags
             .update(&self.handle, "Speed", DataValue::new_now(speed))
+    }
+
+    /// 固定タグ `Speed` の現在値と品質を更新する。Phase 2 の結合前に
+    /// フィルタ未指定の購読通知を検証するための入口。
+    /// Bad 品質と欠損値では、core の写像に従い値を公開しない。
+    pub fn set_fixed_speed_reading(
+        &self,
+        speed: Option<f64>,
+        quality: Quality,
+    ) -> Result<(), Error> {
+        let reading = map_current_value(DataType::Double, speed, quality);
+        let now = DateTime::now();
+        let value = DataValue {
+            // upstream の Variable::value は Value フィールド自体が None だと
+            // StatusCode も落とす。Null Variant で値なしを表して Bad を保つ。
+            value: Some(match reading.value {
+                Some(MappedValue::Boolean(bit)) => Variant::Boolean(bit),
+                Some(MappedValue::Double(number)) => Variant::Double(number),
+                None => Variant::Empty,
+            }),
+            status: Some(reading.status.code().into()),
+            source_timestamp: Some(now),
+            source_picoseconds: None,
+            server_timestamp: Some(now),
+            server_picoseconds: None,
+        };
+        self.fixed_tags.update(&self.handle, "Speed", value)
     }
 
     /// Phase 1 の固定タグ `PLC1.Line1.Running` を更新して購読者へ通知する。
