@@ -125,7 +125,7 @@ banto の ADR-0011 に合わせ、配布は git タグを予定する。crates.i
 
 1. **NodeId。** 外部名 `{connection}.{group}.{tag}` を使う。`tag_id` は削除して作り直すと変わるため使わない。2026-09-30 の banto-industrial のオーナー決定に準拠する。core の `NodeId::external_name` がこの形を作る。数値 NodeId は標準ノード用に残す。
 2. **DataType。** 収集済みの数値は Double に固定する。`bit` は Boolean、`string` は周期収集の対象外なので値を公開しない。Int16 や Float には分けない。
-3. **品質。** Bad の細分化は後回しにし、現状を維持する。Good は Good、Bad は Bad、Stale は `UncertainLastUsableValue`（0x40900000）。
+3. **品質と値。** Bad の細分化は後回しにする。有効な値では Good は Good、Stale は `UncertainLastUsableValue`（0x40900000）として最後の値を保持する。Bad 品質や欠損値は値なし・汎用 `Bad`（0x80000000）。Double の NaN / ±Inf、Boolean に写す bit の 0 / 1 以外も値なし・汎用 `Bad` とし、丸めない。Stale でも値が無効なら Bad を優先する。bit の `-0.0` は `0.0` と同じ false として扱う。core の `map_current_value` がこの契約を実装する。REST / WS / gRPC と共通化するかは [banto-industrial #615](https://github.com/tyaro/banto-industrial/issues/615) で検討中。
 4. **時刻。** Good の SourceTimestamp は採取時刻、Bad と Stale は品質を認識した時刻、不明なときは null。ハブ側の変更が必要なので、実装は Phase 2 とし、この足場は方針の記載のみ。
 5. **ポート。** 既定は 4840。設定で変更できる。
 6. **LAN 公開。** 条件付きで許可する。`advertised_host` を用意し、未指定アドレス（`0.0.0.0` / `::`）でそれが未設定なら起動はエラーになる。ループバック以外は明示したときだけ公開し、そのときは警告ログを出す。既定の bind は `127.0.0.1`。
@@ -135,8 +135,8 @@ banto の ADR-0011 に合わせ、配布は git タグを予定する。crates.i
 
 ## Phase 2 の検討事項
 
-実装はこの足場に入れない。方針だけを残す。
+ハブとの結合に必要な残件を記録する。
 
 - **削除されたノードの購読。** `BadNodeIdUnknown` を通知する。MonitoredItem は残し、同じ NodeId が戻ったら購読を再開する。実装は `notify_data_change`。定数 `StatusCode::BAD_NODE_ID_UNKNOWN` だけ置いてある。
-- **非有限値と bit。** NaN / Inf、および 0 と 1 以外の bit 値は Bad とする契約にする。現状のハブは NaN を null かつ Good で出す。
+- **非有限値と bit。** core の値・品質変換をハブの現在値へ接続する。現状のハブは NaN を null かつ Good で出す。共通の読み取り契約は [banto-industrial #615](https://github.com/tyaro/banto-industrial/issues/615) で未決定。
 - **品質だけの変化。** 値が変わらず品質だけ Good から Stale になったとき、通知が飛ばない。`DataChangeFilter` はクライアントが指定するもので、サーバーから trigger を強制できない。サーバー側でフィルタ未指定を `StatusValue` として扱う回避策、または upstream（async-opcua）の修正が必要。
