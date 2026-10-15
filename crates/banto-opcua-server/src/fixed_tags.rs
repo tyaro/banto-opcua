@@ -7,9 +7,9 @@ use opcua::{
         ServerHandle,
         address_space::{ObjectBuilder, Variable},
         diagnostics::NamespaceMetadata,
-        node_manager::memory::{CoreNodeManager, SimpleNodeManager, simple_node_manager},
+        node_manager::memory::{SimpleNodeManager, simple_node_manager},
     },
-    types::{DataValue, NodeId, ObjectId, QualifiedName, ReferenceTypeId},
+    types::{DataValue, NodeId, ObjectId, QualifiedName, ReferenceTypeId, VariableTypeId},
 };
 
 use crate::Error;
@@ -45,11 +45,6 @@ impl FixedTags {
             .node_managers()
             .get_by_name::<SimpleNodeManager>(MANAGER_NAME)
             .ok_or_else(|| Error::Build("固定タグの node manager がありません".to_owned()))?;
-        let core = handle
-            .node_managers()
-            .get_of_type::<CoreNodeManager>()
-            .ok_or_else(|| Error::Build("標準名前空間の node manager がありません".to_owned()))?;
-
         let banto = NodeId::new(namespace_index, "Banto");
         let plc = NodeId::new(namespace_index, "PLC1");
         let line = NodeId::new(namespace_index, "PLC1.Line1");
@@ -85,14 +80,13 @@ impl FixedTags {
                     return Err(Error::Build(format!("固定タグ {name} を登録できません")));
                 }
                 space.insert_reference(&line, &id, ReferenceTypeId::HasComponent);
+                space.insert_reference(
+                    &id,
+                    &VariableTypeId::BaseDataVariableType.into(),
+                    ReferenceTypeId::HasTypeDefinition,
+                );
             }
         }
-        // 標準 Objects フォルダーから別 node manager の Banto を辿れるようにする。
-        core.address_space().write().insert_reference(
-            &ObjectId::ObjectsFolder.into(),
-            &banto,
-            ReferenceTypeId::Organizes,
-        );
         Ok(Self {
             namespace_index,
             manager,

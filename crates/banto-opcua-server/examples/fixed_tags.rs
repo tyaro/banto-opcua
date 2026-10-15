@@ -1,6 +1,6 @@
 //! UaExpert で固定タグの Browse / Read / Subscribe を試すサーバー。
 
-use std::io::{self, BufRead};
+use std::io;
 
 use banto_opcua_server::{OpcUaServer, ServerConfig};
 
@@ -16,8 +16,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut speed = 0.0;
     let mut running = false;
-    for line in io::stdin().lock().lines() {
-        if line?.trim() == "q" {
+    loop {
+        let (bytes, line) = tokio::task::spawn_blocking(|| {
+            let mut line = String::new();
+            let bytes = io::stdin().read_line(&mut line)?;
+            Ok::<_, io::Error>((bytes, line))
+        })
+        .await??;
+        if bytes == 0 || line.trim() == "q" {
             break;
         }
         speed += 1.0;

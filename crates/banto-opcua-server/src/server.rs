@@ -142,6 +142,7 @@ impl RunningServer {
 
     /// Phase 1 の固定タグ `PLC1.Line1.Speed` を更新して購読者へ通知する。
     /// 有限値以外は拒否する。
+    /// ハブのタグレジストリを接続する Phase 2 で更新 API を置き換える。
     pub fn set_fixed_speed(&self, speed: f64) -> Result<(), Error> {
         if !speed.is_finite() {
             return Err(Error::TagUpdate("Speed は有限値にしてください".to_owned()));
@@ -151,6 +152,7 @@ impl RunningServer {
     }
 
     /// Phase 1 の固定タグ `PLC1.Line1.Running` を更新して購読者へ通知する。
+    /// ハブのタグレジストリを接続する Phase 2 で更新 API を置き換える。
     pub fn set_fixed_running(&self, running: bool) -> Result<(), Error> {
         self.fixed_tags
             .update(&self.handle, "Running", DataValue::new_now(running))

@@ -2,7 +2,7 @@
 # Subscription まで。ハブのタグレジストリは Phase 2 で接続する。
 [package]
 name = "banto-opcua-server"
-description = "banto OPC UA サーバー（足場）。既定の待受は 127.0.0.1、初期スコープは読み取り専用"
+description = "banto OPC UA サーバー。既定の待受は 127.0.0.1、初期スコープは読み取り専用"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

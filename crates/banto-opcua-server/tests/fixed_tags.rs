@@ -9,8 +9,8 @@ use opcua::{
     types::{
         AttributeId, BrowseDescription, BrowseDirection, DataTypeId, DataValue,
         MessageSecurityMode, MonitoredItemCreateRequest, NodeId, ObjectId, ReadValueId,
-        ReferenceTypeId, StatusCode, TimestampsToReturn, UserTokenPolicy, VariableId, Variant,
-        WriteValue,
+        ReferenceDescription, ReferenceTypeId, StatusCode, TimestampsToReturn, UserTokenPolicy,
+        VariableId, VariableTypeId, Variant, WriteValue,
     },
 };
 
@@ -72,8 +72,18 @@ async fn fixed_tags_can_be_browsed_read_and_subscribed() {
     assert_eq!(banto, NodeId::new(ns, "Banto"));
     let plc = browse_child(&session, banto, "PLC1").await;
     let line = browse_child(&session, plc, "Line1").await;
-    let speed = browse_child(&session, line.clone(), "Speed").await;
-    let running = browse_child(&session, line, "Running").await;
+    let speed_reference = browse_child_reference(&session, line.clone(), "Speed").await;
+    let running_reference = browse_child_reference(&session, line, "Running").await;
+    assert_eq!(
+        speed_reference.type_definition.node_id,
+        VariableTypeId::BaseDataVariableType
+    );
+    assert_eq!(
+        running_reference.type_definition.node_id,
+        VariableTypeId::BaseDataVariableType
+    );
+    let speed = speed_reference.node_id.node_id;
+    let running = running_reference.node_id.node_id;
     assert_eq!(speed, NodeId::new(ns, "PLC1.Line1.Speed"));
     assert_eq!(running, NodeId::new(ns, "PLC1.Line1.Running"));
 
@@ -106,8 +116,12 @@ async fn fixed_tags_can_be_browsed_read_and_subscribed() {
         .await
         .expect("Write のサービス応答がある");
     assert!(
-        write_results[0].is_bad(),
-        "読み取り専用タグの Write を拒否する"
+        matches!(
+            write_results[0],
+            StatusCode::BadNotWritable | StatusCode::BadUserAccessDenied
+        ),
+        "読み取り専用タグの Write を拒否する: {}",
+        write_results[0]
     );
     assert_eq!(
         read_attribute(&session, &speed, AttributeId::Value).await,
@@ -197,6 +211,17 @@ async fn fixed_tags_can_be_browsed_read_and_subscribed() {
 }
 
 async fn browse_child(session: &Session, parent: NodeId, name: &str) -> NodeId {
+    browse_child_reference(session, parent, name)
+        .await
+        .node_id
+        .node_id
+}
+
+async fn browse_child_reference(
+    session: &Session,
+    parent: NodeId,
+    name: &str,
+) -> ReferenceDescription {
     let results = session
         .browse(
             &[BrowseDescription {
@@ -214,14 +239,14 @@ async fn browse_child(session: &Session, parent: NodeId, name: &str) -> NodeId {
         .expect("Browse に成功する");
     let result = results.into_iter().next().expect("Browse 結果がある");
     assert_eq!(result.status_code, StatusCode::Good);
-    result
+    let matches: Vec<_> = result
         .references
         .unwrap_or_default()
         .into_iter()
-        .find(|reference| reference.browse_name.name.as_ref() == name)
-        .unwrap_or_else(|| panic!("{name} が Browse できない"))
-        .node_id
-        .node_id
+        .filter(|reference| reference.browse_name.name.as_ref() == name)
+        .collect();
+    assert_eq!(matches.len(), 1, "{name} の参照は 1 件だけ");
+    matches.into_iter().next().expect("参照が 1 件ある")
 }
 
 async fn read_attribute(session: &Session, id: &NodeId, attribute: AttributeId) -> Variant {
