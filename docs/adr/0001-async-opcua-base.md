@@ -34,11 +34,12 @@ ADR-0002 は「依存を足さない」を既定にしつつ、自前実装が�
 このコミットには 0.19.0 以降の別の upstream 変更も含まれるため、依存更新時は
 回帰テストと cargo-deny を実行する。
 
-banto-industrial の `deny.toml` は `unknown-git = "deny"` だけでなく
-`required-git-spec = "tag"` も指定する。本リポジトリの `allow-git` を増やしても
-`rev` 依存は通らない。ハブへ取り込むタグは、#17 で crates.io 版へ戻した後に切る。
-それより先に取り込む場合は、banto-industrial 側で依存ソース方針の変更を決め、
-そのリポジトリの cargo-deny を通す必要がある。
+banto-industrial の `deny.toml` は `unknown-git = "deny"` で、`allow-git` に
+async-opcua の URL がない。ハブへ取り込むタグは、#17 で crates.io 版へ戻した後に
+切るか、それより先に取り込む場合は banto-industrial の `allow-git` に
+`https://github.com/FreeOpcUa/async-opcua` を一時的に加え、そのリポジトリの
+cargo-deny を通す。industrial 側の `required-git-spec = "tag"` は最低要件であり、
+本依存の `rev` 指定はこれを満たす。追加した許可は #17 の公開版への移行後に削除する。
 
 - `banto-opcua-server` は feature `server`（標準アドレス空間を含む）だけを有効にする。
 - `banto-opcua-client` は feature `client` だけを有効にする。
