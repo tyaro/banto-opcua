@@ -9,7 +9,9 @@ use tokio::{net::TcpListener, task::JoinHandle};
 
 use crate::{
     Error, ServerConfig,
-    config::{host_is_loopback, host_is_unspecified, normalize_endpoint_path},
+    config::{
+        host_is_loopback, host_is_unspecified, normalize_endpoint_path, valid_advertised_host,
+    },
 };
 
 /// サーバーを起動する入口。状態は持たない。
@@ -34,6 +36,12 @@ impl OpcUaServer {
             .is_some_and(host_is_unspecified)
         {
             return Err(Error::AdvertisedHostRequired);
+        }
+        if let Some(host) = config.advertised_host.as_deref()
+            && !host.trim().is_empty()
+            && !valid_advertised_host(host)
+        {
+            return Err(Error::InvalidAdvertisedHost(host.to_owned()));
         }
 
         let pki = tempfile::tempdir().map_err(Error::Pki)?;
@@ -192,5 +200,28 @@ mod tests {
         );
         assert!(!server.endpoint().contains("0.0.0.0"));
         server.shutdown().await.expect("server shuts down");
+    }
+
+    #[tokio::test]
+    async fn malformed_advertised_hosts_are_rejected_before_bind() {
+        for host in [
+            "opc.tcp://host",
+            "host:4840",
+            "host/path",
+            "[::1",
+            "bad host",
+            " host",
+        ] {
+            let err = OpcUaServer::start(ServerConfig {
+                advertised_host: Some(host.to_owned()),
+                ..ServerConfig::default()
+            })
+            .await
+            .expect_err("公開ホストには単体のホスト名が必要");
+            assert!(
+                matches!(err, Error::InvalidAdvertisedHost(_)),
+                "{host}: {err}"
+            );
+        }
     }
 }

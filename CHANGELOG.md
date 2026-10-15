@@ -11,6 +11,8 @@
 - 基盤実装の ADR-0001（async-opcua 0.19、本クレートは MIT）。
 - ループバックのプロセス内テストと、相互接続用の別ワークフロー（中身は TODO）。
 - サーバーの `advertised_host`。未指定アドレスで未設定なら起動しない。
+- `ServerConfig` の `with_*` 設定メソッドと、接続待ち時間を指定できるクライアント API。
+- 接続待ちの時間切れとキャンセルで TCP 接続が閉じることを確かめる、対象 PR と nightly の回帰テスト。
 
 ### 修正
 
@@ -18,3 +20,10 @@
 - IPv6 のエンドポイント URL を括弧付きにした。
 - OPC UA DateTime の変換を 100 ナノ秒単位で行い、2262 年以降も変換できるようにした。境界テストは `SystemTime` の範囲に依存しない。
 - サーバーの Drop が待受タスクを abort し、証明書の一時ディレクトリはタスクが終わるまで残るようにした。
+- `advertised_host` に URL、ポート、パスなどを含めた設定を起動前に拒否する。
+- `advertised_host` に末尾ドット付きの DNS 名を指定でき、URL にはドットなしで載せる。
+
+### 変更
+
+- `ServerConfig` は外部クレートで構造体リテラルを使えなくなった。`ServerConfig::default().with_port(...)` などへ移行する。
+- 自由関数 `endpoint_url` を公開 API から外した。`ServerConfig::endpoint_url` を使う。

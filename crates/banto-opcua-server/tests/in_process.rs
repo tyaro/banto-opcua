@@ -10,12 +10,9 @@ use banto_opcua_server::{OpcUaServer, ServerConfig};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn client_reads_server_state_on_loopback() {
-    let server = OpcUaServer::start(ServerConfig {
-        port: 0,
-        ..ServerConfig::default()
-    })
-    .await
-    .expect("server starts");
+    let server = OpcUaServer::start(ServerConfig::default().with_port(0))
+        .await
+        .expect("server starts");
 
     let addr = server.local_addr();
     assert_eq!(addr.ip(), Ipv4Addr::LOCALHOST);
@@ -41,11 +38,11 @@ async fn client_reads_server_state_on_ipv6_loopback() {
         return;
     }
 
-    let server = OpcUaServer::start(ServerConfig {
-        bind: IpAddr::V6(Ipv6Addr::LOCALHOST),
-        port: 0,
-        ..ServerConfig::default()
-    })
+    let server = OpcUaServer::start(
+        ServerConfig::default()
+            .with_bind(IpAddr::V6(Ipv6Addr::LOCALHOST))
+            .with_port(0),
+    )
     .await
     .expect("server starts");
 
