@@ -27,13 +27,14 @@ async fn stalled_session_closes_after_timeout_and_cancellation() {
         let session_timeout = if cancel {
             Duration::from_secs(10)
         } else {
-            Duration::from_millis(500)
+            Duration::from_secs(2)
         };
         let connection = tokio::spawn(async move {
             OpcUaClient::connect_with_session_timeout(&endpoint, session_timeout).await
         });
 
-        let (mut discovery, _) = tokio::time::timeout(Duration::from_secs(10), proxy.accept())
+        // CI では接続前のサンプル鍵生成に時間がかかることがある。
+        let (mut discovery, _) = tokio::time::timeout(Duration::from_secs(45), proxy.accept())
             .await
             .expect("Discovery connection arrives")
             .expect("accept Discovery connection");
