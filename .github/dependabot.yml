@@ -1,0 +1,19 @@
+# Dependabot。banto-industrial の週次・件数上限に合わせる。
+# npm は無い。git 依存も無い（async-opcua は crates.io）。
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(ci)

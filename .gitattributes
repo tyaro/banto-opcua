@@ -1,0 +1,17 @@
+# リポジトリ内の改行は LF。rustfmt が Windows CI で差分を出さないようにする。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.dll binary
+*.lib binary
+*.exe binary
+*.pdb binary

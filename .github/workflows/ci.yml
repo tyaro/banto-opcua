@@ -1,0 +1,174 @@
+# CI
+#
+# banto の rust ジョブ（fmt / clippy / test を Linux と Windows）に、
+# banto-industrial の変更パス判定と ci-gate、cargo-deny を足した構成。
+#
+#   changes ──┬─ rust（条件付き。ubuntu と windows）
+#             └─ deny（条件付き。licenses / bans / sources / advisories）
+#   ci-gate（必ず。if: always()）
+#   ブランチ保護の Required Check は ci-gate 1 つに集約する。
+#
+# 相互接続は別ワークフロー（interop.yml）。ここには入れない。
+#
+# サードパーティ Action はコミット SHA でピンする（banto の P3-6）。
+# 例外は dtolnay/rust-toolchain@stable。タグがツールチェインのチャンネル
+# 選択を兼ね、SHA にすると凍結する。実際の版は rust-toolchain.toml が勝つ。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: changes (変更パス判定)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      full: ${{ steps.classify.outputs.full }}
+      docs: ${{ steps.classify.outputs.docs }}
+      rust: ${{ steps.classify.outputs.rust }}
+      run_rust: ${{ steps.classify.outputs.run_rust }}
+      run_deny: ${{ steps.classify.outputs.run_deny }}
+      rust_args: ${{ steps.classify.outputs.rust_args }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Test classifier
+        run: node --test .github/scripts/ci-changes.test.mjs
+
+      - name: List changed files
+        id: diff
+        if: github.event_name == 'pull_request'
+        run: |
+          out="$RUNNER_TEMP/changed.txt"
+          if git rev-parse --verify -q 'HEAD^2' >/dev/null \
+            && git -c core.quotePath=false diff --name-only --no-renames 'HEAD^1' HEAD > "$out"; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "changed files: $(wc -l < "$out")"
+            cat "$out"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::PR の差分を取得できなかったのでフル CI にする"
+          fi
+
+      - name: Classify
+        id: classify
+        env:
+          CI_EVENT: ${{ github.event_name }}
+          CI_DIFF_OK: ${{ steps.diff.outputs.ok }}
+          CI_CHANGED_FILES: ${{ runner.temp }}/changed.txt
+        run: node .github/scripts/ci-changes.mjs
+
+  rust:
+    name: Rust (fmt / clippy / test)
+    needs: changes
+    if: needs.changes.outputs.run_rust == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Format check (rustfmt)
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+  deny:
+    name: cargo-deny
+    needs: changes
+    if: needs.changes.outputs.run_deny == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-deny
+
+      - name: cargo deny check
+        run: cargo deny --all-features check
+
+  ci-gate:
+    name: ci-gate
+    if: always()
+    needs:
+      - changes
+      - rust
+      - deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check required jobs
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+
+          changes=$(jq -r '.changes.result' <<<"$NEEDS")
+          if [ "$changes" != "success" ]; then
+            echo "::error::changes が $changes（判定できていないので通さない）"
+            exit 1
+          fi
+
+          fail=0
+          while IFS=$'\t' read -r job result; do
+            case "$result" in
+              failure|cancelled)
+                echo "::error::$job が $result"
+                fail=1
+                ;;
+            esac
+          done < <(jq -r 'to_entries[] | "\(.key)\t\(.value.result)"' <<<"$NEEDS")
+
+          check() {
+            local job=$1 key=$2 result want
+            result=$(jq -r --arg j "$job" '.[$j].result' <<<"$NEEDS")
+            want=$(jq -r --arg k "$key" '.changes.outputs[$k]' <<<"$NEEDS")
+            if [ "$want" = "true" ] && [ "$result" != "success" ]; then
+              echo "::error::$job は実行が必要（$key=true）なのに $result"
+              fail=1
+            fi
+          }
+          check rust run_rust
+          check deny run_deny
+
+          exit "$fail"

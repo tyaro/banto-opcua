@@ -1,0 +1,54 @@
+# 外部実装との相互接続。
+#
+# PR の必須 CI（ci.yml）には入れない。プロセス内テストは ci.yml の cargo test。
+# ここは次の相手を想定した別ワークフローで、中身はまだプレースホルダ。
+#
+#   - 本リポジトリのサーバーに対する Python asyncua クライアント
+#   - 本リポジトリのクライアントに対する mcr.microsoft.com/iotedge/opc-plc（Linux）
+#
+# 起動: 手動、毎日、main への push。PR は下の paths に当たったときだけ。
+
+name: Interop
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 18 * * *"
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "deny.toml"
+      - ".github/workflows/interop.yml"
+      - "interop/**"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  external:
+    name: External interop (placeholder)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # TODO: タグのアドレス空間ができてから、次を実装する。
+      #   1. 本リポジトリのサーバーを 127.0.0.1 の空きポートで起動する。
+      #   2. Python asyncua クライアントで Browse / Read / Subscription を確認する。
+      #   3. Linux 上で mcr.microsoft.com/iotedge/opc-plc を起動し、
+      #      banto-opcua-client から Read できることを確認する。
+      # 足場の時点では公開するタグノードが無く、opc-plc を動かしても
+      # 本クレートの契約を検証できない。失敗させずに TODO を残す。
+      - name: Placeholder
+        run: |
+          echo "TODO: interop tests are not implemented yet."
+          echo "Planned peers: Python asyncua client, mcr.microsoft.com/iotedge/opc-plc."
+          echo "In-process loopback tests run in the CI workflow via cargo test."
+          echo "See interop/README.md."
