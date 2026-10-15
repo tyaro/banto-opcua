@@ -16,6 +16,7 @@
 - Phase 1 の固定タグ `Speed` / `Running`。Browse / Read / Subscription と試験用の値更新 API、UaExpert 用のサンプルサーバー。
 - core の現在値・品質の写像。非有限値、0 / 1 以外の bit、欠損値を値なし・汎用 Bad として扱う。
 - core の品質別 SourceTimestamp 写像。時刻不明は null のままにし、固定タグの反復 Read でも採取時刻を保持する。
+- Python asyncua と opc-plc を使う外部相互接続テスト。固定タグの購読と外部サーバーの UInt32 タグ Read を検証する。
 
 ### 修正
 

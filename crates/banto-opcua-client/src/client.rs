@@ -6,13 +6,14 @@ use opcua::{
     client::{Client, ClientBuilder, IdentityToken, Session},
     crypto::SecurityPolicy,
     types::{
-        AttributeId, MessageSecurityMode, ReadValueId, StatusCode, TimestampsToReturn,
-        UserTokenPolicy, VariableId, Variant,
+        AttributeId, MessageSecurityMode, NodeId as UaNodeId, ReadValueId, StatusCode,
+        TimestampsToReturn, UserTokenPolicy, VariableId, Variant,
     },
 };
 use tokio::task::JoinHandle;
 
 use crate::Error;
+use banto_opcua_core::{Identifier, NodeId};
 
 /// クライアントを接続する入口。状態は持たない。
 #[derive(Debug, Default)]
@@ -123,11 +124,39 @@ pub struct ConnectedClient {
 impl ConnectedClient {
     /// `ServerStatus/State` を読む。OPC UA では Running が 0。
     pub async fn read_server_state(&self) -> Result<i32, Error> {
+        let value = self
+            .read_value(VariableId::Server_ServerStatus_State.into())
+            .await?;
+        match value {
+            Variant::Int32(state) => Ok(state),
+            other => Err(Error::Read(format!(
+                "State の型が Int32 ではありません: {other:?}"
+            ))),
+        }
+    }
+
+    /// 指定した NodeId の UInt32 値を読む。外部サーバーのタグ Read に使う。
+    /// 値が無い、または Bad の場合はエラーにする。
+    pub async fn read_u32(&self, node_id: &NodeId) -> Result<u32, Error> {
+        let id = match &node_id.identifier {
+            Identifier::Numeric(id) => UaNodeId::new(node_id.namespace, *id),
+            Identifier::String(id) => UaNodeId::new(node_id.namespace, id.clone()),
+        };
+        let value = self.read_value(id).await?;
+        match value {
+            Variant::UInt32(number) => Ok(number),
+            other => Err(Error::Read(format!(
+                "{node_id} の型が UInt32 ではありません: {other:?}"
+            ))),
+        }
+    }
+
+    async fn read_value(&self, node_id: UaNodeId) -> Result<Variant, Error> {
         let values = self
             .session
             .read(
                 &[ReadValueId {
-                    node_id: VariableId::Server_ServerStatus_State.into(),
+                    node_id,
                     attribute_id: AttributeId::Value as u32,
                     ..Default::default()
                 }],
@@ -145,13 +174,9 @@ impl ConnectedClient {
         {
             return Err(Error::Read(format!("StatusCode が Bad でした: {status}")));
         }
-        match value.value {
-            Some(Variant::Int32(state)) => Ok(state),
-            Some(other) => Err(Error::Read(format!(
-                "State の型が Int32 ではありません: {other:?}"
-            ))),
-            None => Err(Error::Read("State の値がありません".to_owned())),
-        }
+        value
+            .value
+            .ok_or_else(|| Error::Read("値がありません".to_owned()))
     }
 
     /// セッションを閉じてイベントループの終了を待つ。

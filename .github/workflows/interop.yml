@@ -1,12 +1,5 @@
-# 外部実装との相互接続。
-#
-# PR の必須 CI（ci.yml）には入れない。プロセス内テストは ci.yml の cargo test。
-# ここは次の相手を想定した別ワークフローで、中身はまだプレースホルダ。
-#
-#   - 本リポジトリのサーバーに対する Python asyncua クライアント
-#   - 本リポジトリのクライアントに対する mcr.microsoft.com/iotedge/opc-plc（Linux）
-#
-# 起動: 手動、毎日、main への push。PR は下の paths に当たったときだけ。
+# 外部実装との相互接続。PR の必須 CI（ci-gate）には入れない。
+# 手動、毎日、main への push、関連パスを変更した PR で実行する。
 
 name: Interop
 
@@ -31,24 +24,79 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  external:
-    name: External interop (placeholder)
+  asyncua:
+    name: Python asyncua → banto server
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # TODO: タグのアドレス空間ができてから、次を実装する。
-      #   1. 本リポジトリのサーバーを 127.0.0.1 の空きポートで起動する。
-      #   2. Python asyncua クライアントで Browse / Read / Subscription を確認する。
-      #   3. Linux 上で mcr.microsoft.com/iotedge/opc-plc を起動し、
-      #      banto-opcua-client から Read できることを確認する。
-      # 足場の時点では公開するタグノードが無く、opc-plc を動かしても
-      # 本クレートの契約を検証できない。失敗させずに TODO を残す。
-      - name: Placeholder
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Build fixed-tag server
+        run: cargo build --locked -p banto-opcua-server --example interop_fixed_tags
+
+      - name: Install pinned Python packages
         run: |
-          echo "TODO: interop tests are not implemented yet."
-          echo "Planned peers: Python asyncua client, mcr.microsoft.com/iotedge/opc-plc."
-          echo "In-process loopback tests run in the CI workflow via cargo test."
-          echo "See interop/README.md."
+          python3 -m venv "$RUNNER_TEMP/interop-venv"
+          "$RUNNER_TEMP/interop-venv/bin/python" -m pip install -r interop/requirements.txt
+
+      - name: GetEndpoints, Browse, Read, Subscription
+        run: |
+          "$RUNNER_TEMP/interop-venv/bin/python" interop/test_asyncua.py \
+            target/debug/examples/interop_fixed_tags
+
+  opc_plc:
+    name: banto client → opc-plc
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Build client probe
+        run: cargo build --locked -p banto-opcua-client --example interop_read
+
+      - name: Start pinned opc-plc
+        run: |
+          docker run --rm -d --name banto-opcua-interop \
+            -p 127.0.0.1:50000:50000 \
+            mcr.microsoft.com/iotedge/opc-plc@sha256:3d16f104393869540403390e617a2d6afe98b3b0673fb9d8ff1533f35b6726cf \
+            --ut --aa --pn=50000 --ph=0.0.0.0
+          for attempt in {1..60}; do
+            if docker logs banto-opcua-interop 2>&1 | rg -q 'OPC UA Server started'; then
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' banto-opcua-interop)" != true ]; then
+              docker logs banto-opcua-interop
+              exit 1
+            fi
+            sleep 2
+          done
+          docker logs banto-opcua-interop
+          exit 1
+
+      - name: Read opc-plc FastUInt1
+        run: target/debug/examples/interop_read opc.tcp://127.0.0.1:50000/
+
+      - name: Stop opc-plc
+        if: always()
+        run: |
+          docker logs --tail 40 banto-opcua-interop || true
+          docker rm -f banto-opcua-interop || true
