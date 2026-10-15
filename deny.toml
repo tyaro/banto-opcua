@@ -1,0 +1,54 @@
+# cargo-deny。banto-industrial の deny.toml と同じスキーマ（0.20 系、
+# licenses の version フィールドは使わない）。
+#
+# 許可ライセンスは推測で埋めず、`cargo deny check licenses` の実測で
+# 足す。このファイルの allow は、async-opcua 0.19 を入れたあとの
+# ワークスペースに対する実測結果である（測定日は下のコメント）。
+#
+# 本クレートは MIT。async-opcua は MPL-2.0（ファイル単位のコピーレフト）。
+# MIT のコードから依存として使えることと、ソースをコピーしないことは
+# docs/adr/0001-async-opcua-base.md。GPL 系は許可しない。
+
+[licenses]
+# 2026-10-15 実測（cargo deny 0.20.2、`cargo deny list`）。
+# 依存木に現れなかったライセンスは入れない。r-efi の
+# `MIT OR Apache-2.0 OR LGPL-2.1-or-later` は MIT で充足するので
+# LGPL は許可しない。
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    # async-opcua 0.19 の 9 クレート。ファイル単位のコピーレフト。
+    # 本クレートは MIT のまま。docs/adr/0001-async-opcua-base.md。
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# publish = false の path 依存を wildcard 扱いにしない。
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[advisories]
+unmaintained = "workspace"
+unsound = "workspace"
+yanked = "warn"
+# RUSTSEC-2023-0071（rsa 0.9.10、async-opcua-crypto 経由）。
+# 理由は docs/adr/0001-async-opcua-base.md。
+# 見直し期日: 2027-01-15、または Phase 3 着手時のいずれか早い方。
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "See docs/adr/0001-async-opcua-base.md. Review by 2027-01-15 or when Phase 3 starts." },
+]

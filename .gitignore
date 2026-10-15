@@ -1,0 +1,13 @@
+/target
+**/*.rs.bk
+.DS_Store
+
+.env
+.env.*
+!.env.example
+
+# async-opcua が既定で書く PKI。テストとサーバー起動は tempfile を使う。
+# 作業ディレクトリに出たものはコミットしない。
+/pki
+/pki-*
+/certs

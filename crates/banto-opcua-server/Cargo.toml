@@ -1,0 +1,22 @@
+# 読み取り専用 OPC UA サーバーの足場。待受と停止、標準アドレス空間での
+# 疎通まで。タグのアドレス空間はまだ作らない（#201 Phase 1 の続き）。
+[package]
+name = "banto-opcua-server"
+description = "banto OPC UA サーバー（足場）。既定の待受は 127.0.0.1、初期スコープは読み取り専用"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-opcua = { workspace = true, features = ["server"] }
+banto-opcua-core = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+banto-opcua-client = { path = "../banto-opcua-client" }

@@ -1,0 +1,19 @@
+# プロセス内テストと、将来のクライアント issue のための足場。
+# #201 の初期スコープはサーバーであり、このクレートの公開面は接続と
+# 標準ノードの Read だけ。
+[package]
+name = "banto-opcua-client"
+description = "banto OPC UA クライアント（足場）。Phase 1 は None / Anonymous での接続と Read"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-opcua = { workspace = true, features = ["client"] }
+banto-opcua-core = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }

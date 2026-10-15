@@ -1,0 +1,7 @@
+# banto-industrial と同じピン（2026-09-06 に 1.98.1 へ上げた版）。
+# このリポジトリも「同じソースから同じものを再生成できる」ことを優先し、
+# floating stable にはしない。CI の dtolnay/rust-toolchain@stable は
+# rustup default を入れるだけで、ディレクトリの本ファイルが優先される。
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]

@@ -1,0 +1,14 @@
+# プロトコルスタックを持たない共有語彙。banto-hub のタグ型・品質・時刻を
+# OPC UA の DataType / StatusCode / Timestamp へ写す規則と、ノードの形だけを
+# 置く。async-opcua には依存しない（ADR-0001、外部型を API に漏らさない）。
+[package]
+name = "banto-opcua-core"
+description = "banto OPC UA の共有語彙（値・StatusCode・時刻・ノード）。プロトコル実装は含まない"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
