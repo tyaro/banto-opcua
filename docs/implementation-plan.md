@@ -50,7 +50,8 @@ PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read �
   実際の Subscription で確かめる。
 - #9 の Python 経路は段階 1 の後に先行できる。opc-plc 経路には、現状の
   `ServerStatus/State` 専用 Read より広い、NodeId を指定する最小限の
-  クライアント Read API が要る。製品としての OPC UA クライアントは #201 の
+  クライアント Read API が要る。#9 の外部テストで UInt32 タグの Read API を
+  追加して 2 経路を検証する。製品としての OPC UA クライアントは #201 の
   対象外として別課題に残す。外部テストは `ci-gate` の必須項目には入れない。
 
 ## 各 PR の検証

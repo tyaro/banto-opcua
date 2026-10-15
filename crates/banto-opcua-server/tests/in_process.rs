@@ -5,7 +5,8 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use banto_opcua_client::OpcUaClient;
+use banto_opcua_client::{Error as ClientError, OpcUaClient};
+use banto_opcua_core::NodeId;
 use banto_opcua_server::{OpcUaServer, ServerConfig};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -27,6 +28,26 @@ async fn client_reads_server_state_on_loopback() {
         .await
         .expect("read ServerStatus/State");
     assert_eq!(state, 0, "ServerState::Running");
+
+    // 標準 UInt32、既存の Double タグ、存在しないタグを実際の Read で確認する。
+    let max_string_length = client
+        .read_u32(&NodeId::numeric(0, 11703))
+        .await
+        .expect("ServerCapabilities/MaxStringLength を UInt32 で読む");
+    assert!(max_string_length > 0);
+    let namespace = server.fixed_namespace_index();
+    assert!(matches!(
+        client
+            .read_u32(&NodeId::string(namespace, "PLC1.Line1.Speed"))
+            .await,
+        Err(ClientError::Read(_))
+    ));
+    assert!(matches!(
+        client
+            .read_u32(&NodeId::string(namespace, "PLC1.Line1.Unknown"))
+            .await,
+        Err(ClientError::Read(_))
+    ));
 
     client.disconnect().await.expect("client disconnects");
     server.shutdown().await.expect("server shuts down");

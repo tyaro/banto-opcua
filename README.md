@@ -60,13 +60,12 @@ Phase 1 の試験用セキュリティは `None` / `None` / Anonymous。既定 b
 | 単体 | PR の CI（Linux と Windows） | core の写像。サーバーを起動しない |
 | プロセス内 | 同上 | ループバックで `ServerStatus/State` を読む。固定タグは Browse / Read / DataChange 通知、読み取り専用の AccessLevel を確認する。IPv6 が使える環境では `[::1]` でも標準ノードの疎通を見る |
 | 接続失敗 | 接続処理を変更する PR・毎日・手動（Linux と Windows） | Discovery だけを通すプロキシでセッションを止め、時間切れとキャンセルで TCP 接続が閉じることを確認する。PR の必須 `ci-gate` には含めない |
-| 相互接続 | 別ワークフロー（`workflow_dispatch`、毎日、main への push、PR はパスで絞る） | 予定: Python asyncua クライアント、`mcr.microsoft.com/iotedge/opc-plc`。中身は未実装の TODO |
+| 相互接続 | 別ワークフロー（`workflow_dispatch`、毎日、main への push、PR はパスで絞る） | Python asyncua → 本サーバーの GetEndpoints / Browse / Read / Subscription と、本クライアント → opc-plc のタグ Read。固定バージョンと実行方法は [`interop/README.md`](interop/README.md) |
 | 手動 | 開発者の手元 | 下記のサンプルサーバーを起動し、UaExpert から Browse / Read / Subscribe |
 | 後続 | 認証試験が要るとき | OPC Foundation Compliance Test Tool（CTT） |
 
 プロセス内テストは外部プロセスもコンテナも要らない。相互接続は PR の
-必須チェックにしない（プレースホルダが失敗で本線を止めないように、別
-ワークフローにしてある）。
+必須チェックにしない。別ワークフローの失敗はそのジョブを失敗させる。
 
 接続失敗の再現テストは `cargo test -p banto-opcua-server --test client_connect_failure -- --ignored`
 で手動実行できる。毎日の実行は
