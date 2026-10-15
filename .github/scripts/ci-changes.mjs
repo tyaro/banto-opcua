@@ -62,7 +62,6 @@ export function derive(areas) {
   return {
     run_rust: run,
     run_deny: run,
-    rust_args: run ? "--workspace" : "",
   };
 }
 

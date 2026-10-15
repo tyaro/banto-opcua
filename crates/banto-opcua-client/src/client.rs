@@ -21,8 +21,9 @@ pub struct OpcUaClient;
 impl OpcUaClient {
     /// `opc.tcp://` URL へ SecurityPolicy `None`、Anonymous で接続する。
     ///
-    /// 証明書のホスト名検証は切っている。Phase 1 はループバックの平文試験であり、
-    /// サンプル証明書の SAN と `127.0.0.1` は一致しない。Phase 3 で検証を戻す。
+    /// `verify_server_certs(false)` はホスト名検証だけでなく、サーバー証明書の
+    /// 検証全体を無効にする。Phase 1 はループバックの平文試験であり、サンプル
+    /// 証明書では検証を通せない。Phase 3 TODO: 証明書検証を戻す。
     pub async fn connect(endpoint: &str) -> Result<ConnectedClient, Error> {
         let pki = tempfile::tempdir().map_err(Error::Pki)?;
         let mut client = ClientBuilder::new()
@@ -32,6 +33,8 @@ impl OpcUaClient {
             .create_sample_keypair(true)
             .pki_dir(pki.path())
             .trust_server_certs(true)
+            // 証明書検証全体を無効化する。ホスト名だけのスイッチではない。
+            // Phase 3 TODO: 検証を戻す。
             .verify_server_certs(false)
             .session_retry_limit(2)
             .client()
@@ -50,7 +53,9 @@ impl OpcUaClient {
             .await
             .map_err(|err| Error::Connect(err.to_string()))?;
 
-        let task = event_loop.spawn();
+        // 時間切れや未接続で抜けると、このガードの Drop がタスクを abort する。
+        // 成功したときだけ disarm して ConnectedClient へ所有権を渡す。
+        let task = AbortOnDrop::new(event_loop.spawn());
         let connected =
             tokio::time::timeout(Duration::from_secs(20), session.wait_for_connection())
                 .await
@@ -61,10 +66,38 @@ impl OpcUaClient {
 
         Ok(ConnectedClient {
             session,
-            task: Some(task),
+            task: Some(task.disarm()),
             _client: client,
             _pki: pki,
         })
+    }
+}
+
+/// `spawn` したタスクを、成功パスで所有権を渡すまで abort する。
+#[must_use = "成功時に disarm しないとタスクが abort される"]
+struct AbortOnDrop<T> {
+    handle: Option<JoinHandle<T>>,
+}
+
+impl<T> AbortOnDrop<T> {
+    /// 直後の失敗パスでもタスクが残らないよう、spawn の戻り値を包む。
+    fn new(handle: JoinHandle<T>) -> Self {
+        Self {
+            handle: Some(handle),
+        }
+    }
+
+    /// 接続成功時にタスクの所有権を取り出す。以降の Drop では abort しない。
+    fn disarm(mut self) -> JoinHandle<T> {
+        self.handle.take().expect("接続タスクは成功パスでのみ外す")
+    }
+}
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
     }
 }
 
@@ -135,5 +168,56 @@ impl Drop for ConnectedClient {
         if let Some(task) = self.task.take() {
             task.abort();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use super::*;
+
+    /// タスクが drop されたことを記録する。
+    struct FlagOnDrop(Arc<AtomicBool>);
+
+    impl Drop for FlagOnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn pending_task(dropped: &Arc<AtomicBool>) -> JoinHandle<()> {
+        let flag = FlagOnDrop(Arc::clone(dropped));
+        tokio::spawn(async move {
+            let _flag = flag;
+            std::future::pending::<()>().await;
+        })
+    }
+
+    #[tokio::test]
+    async fn abort_on_drop_stops_the_spawned_task() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let guard = AbortOnDrop::new(pending_task(&dropped));
+        drop(guard);
+        tokio::task::yield_now().await;
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "spawn したタスクが Drop で abort されず残っている"
+        );
+    }
+
+    #[tokio::test]
+    async fn disarm_transfers_the_task_without_aborting_it() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let handle = AbortOnDrop::new(pending_task(&dropped)).disarm();
+        tokio::task::yield_now().await;
+        assert!(!dropped.load(Ordering::SeqCst));
+        assert!(!handle.is_finished());
+        handle.abort();
+        tokio::task::yield_now().await;
+        assert!(dropped.load(Ordering::SeqCst));
     }
 }

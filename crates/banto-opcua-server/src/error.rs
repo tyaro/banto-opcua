@@ -1,6 +1,11 @@
 /// サーバーの起動と停止で起きる失敗。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// 未指定アドレスをエンドポイントへ載せる設定になっている。
+    #[error(
+        "未指定アドレス（0.0.0.0 / ::）はエンドポイントに載せられません。公開するホストを advertised_host に設定してください"
+    )]
+    AdvertisedHostRequired,
     /// TCP の bind、またはローカルアドレスの取得に失敗した。
     #[error("OPC UA サーバーの待受に失敗しました: {0}")]
     Bind(#[source] std::io::Error),

@@ -1,11 +1,12 @@
 //! banto 向け OPC UA サーバーの足場。
 //!
-//! 既定の待受は `127.0.0.1`。セキュリティは Phase 1 の試験用として
-//! SecurityPolicy `None` / MessageSecurityMode `None` / Anonymous だけを
-//! 開く。証明書・ユーザー認証は Phase 3（tyaro/banto-industrial#201）。
-//! ループバック以外へバインドすると、そのインターフェースに対して匿名かつ
-//! 平文で待受する。LAN 公開は呼び出し側の明示的な opt-in であり、この
-//! クレートの既定ではない。
+//! 既定の待受は `127.0.0.1`、既定ポートは 4840。セキュリティは Phase 1 の
+//! 試験用として SecurityPolicy `None` / MessageSecurityMode `None` /
+//! Anonymous だけを開く。証明書・ユーザー認証は Phase 3
+//! （tyaro/banto-industrial#201）。
+//!
+//! 未指定アドレス（`0.0.0.0` / `::`）で待受するときは `advertised_host` が
+//! 必須。ループバック以外への公開は明示したときだけで、警告ログを出す。
 //!
 //! タグのアドレス空間はまだ作らない。起動すると async-opcua の標準
 //! 名前空間だけが載る。プロセス内の疎通は `tests/in_process.rs`。

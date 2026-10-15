@@ -3,7 +3,7 @@
 //! PR の CI（`cargo test`）が毎回実行する層。外部の Python クライアントや
 //! opc-plc コンテナは `.github/workflows/interop.yml` の別ワークフロー。
 
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use banto_opcua_client::OpcUaClient;
 use banto_opcua_server::{OpcUaServer, ServerConfig};
@@ -33,4 +33,51 @@ async fn client_reads_server_state_on_loopback() {
 
     client.disconnect().await.expect("client disconnects");
     server.shutdown().await.expect("server shuts down");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_reads_server_state_on_ipv6_loopback() {
+    if !ipv6_loopback_available() {
+        return;
+    }
+
+    let server = OpcUaServer::start(ServerConfig {
+        bind: IpAddr::V6(Ipv6Addr::LOCALHOST),
+        port: 0,
+        ..ServerConfig::default()
+    })
+    .await
+    .expect("server starts");
+
+    assert!(
+        server.endpoint().starts_with("opc.tcp://[::1]:"),
+        "{}",
+        server.endpoint()
+    );
+
+    let client = OpcUaClient::connect(server.endpoint())
+        .await
+        .expect("client connects");
+    let state = client
+        .read_server_state()
+        .await
+        .expect("read ServerStatus/State");
+    assert_eq!(state, 0, "ServerState::Running");
+
+    client.disconnect().await.expect("client disconnects");
+    server.shutdown().await.expect("server shuts down");
+}
+
+/// `[::1]` へ bind できなければ IPv6 テストをスキップする。
+fn ipv6_loopback_available() -> bool {
+    match std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, 0)) {
+        Ok(listener) => {
+            drop(listener);
+            true
+        }
+        Err(err) => {
+            eprintln!("IPv6 の [::1] へ bind できないためスキップします: {err}");
+            false
+        }
+    }
 }

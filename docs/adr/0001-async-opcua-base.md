@@ -107,6 +107,6 @@ open62541 とその Rust バインディングも MPL-2.0 である。ライセ�
 - MPL のソースをこのリポジトリへコピーしない。upstream を直すときは upstream へ返すか、MPL のままのパッチとして分離する。
 - `deny.toml` の許可ライセンスは、実測した依存木に現れたものだけにする。MPL-2.0 はその実測に含まれる。新しいコピーレフトを足すときはこの ADR を見直す。
 - Phase 3 でセキュリティポリシーを開くときは、非推奨の Basic128Rsa15 と Basic256 を既定にしない。
-- `async-opcua-crypto` が依存する `rsa` 0.9.10 には RUSTSEC-2023-0071（タイミングサイドチャネル、修正版なし）がある。Phase 1 は SecurityPolicy `None` で RSA の秘密操作をしない。`deny.toml` はこの advisory を、Phase 3 で RSA 系ポリシーを開くまでの期限付きで無視する。無視を外せる版が出たら依存を上げて無視を消す。
+- `async-opcua-crypto` が依存する `rsa` 0.9.10 には RUSTSEC-2023-0071（Marvin Attack。RSA 秘密操作のタイミングサイドチャネル）がある。advisory は 2026-09-12 時点で修正版が無いと書いている。Phase 1 のエンドポイントは SecurityPolicy `None` で、RSA の秘密操作はしない。`deny.toml` はこの advisory を無視する。見直し期日は 2027-01-15、または Phase 3（証明書と SecurityPolicy）に着手するときのいずれか早い方。無視を外せる版が出たら依存を上げ、`deny.toml` の ignore とこの項目を消す。README と `deny.toml` は理由を繰り返さず、この項目を参照する。
 - banto-industrial が git 依存で本クレートを取るときは、ハブのバイナリに MPL のコードが含まれることをリリースノートか依存の説明に残す。
-- タグのアドレス空間、NodeId の永続化、型と品質の最終写像は、この ADR の範囲外（#201 の未決）。基盤の選択とは分けて決める。
+- タグのアドレス空間はこの ADR の範囲外。NodeId、DataType、品質、時刻、ポート、LAN 公開は 2026-10-15 に決定し、README の「決定事項」に記載した。

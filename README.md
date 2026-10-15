@@ -38,7 +38,7 @@ crates/
 
 | 段階 | 内容 | 置き場 |
 | --- | --- | --- |
-| 足場（この PR） | クレート分割、基盤の ADR、ループバックのプロセス内疎通 | 本リポジトリ |
+| 足場 | クレート分割、基盤の ADR、ループバックのプロセス内疎通 | 本リポジトリ |
 | Phase 1 | サーバー起動、固定の名前空間、少数の変数、UaExpert から Browse / Read / Subscribe | 本リポジトリ、その後ハブへ接続 |
 | Phase 2 | タグレジストリ、アドレス空間、型・品質・時刻の写像、設定、管理 UI、Windows サービス | 主に banto-hub。写像の純関数は core |
 | Phase 3 | 証明書、SecurityPolicy、認証、トラスト、相互接続、ソーク | 本リポジトリとハブ |
@@ -47,16 +47,16 @@ crates/
 #201 の初期スコープ外はクライアント製品、Write、Method、Event / Alarm、
 Historical Access、コンパニオン仕様、Discovery Server、細かい権限である。
 
-Phase 1 の試験用セキュリティは `None` / `None` / Anonymous。既定 bind が
-ループバックであることを、この組み合わせの条件にする。証明書管理 UI は
-Phase 3 まで前倒ししない。
+Phase 1 の試験用セキュリティは `None` / `None` / Anonymous。既定 bind は
+ループバック、既定ポートは 4840。ループバック以外は明示設定のときだけ、
+警告ログ付きで許可する（「決定事項」）。証明書管理 UI は Phase 3 まで前倒ししない。
 
 ## テストの層
 
 | 層 | いつ | 何を見るか |
 | --- | --- | --- |
 | 単体 | PR の CI（Linux と Windows） | core の写像。サーバーを起動しない |
-| プロセス内 | 同上 | `127.0.0.1` の空きポートでサーバーを起動し、同梱クライアントが接続して `ServerStatus/State` を読む |
+| プロセス内 | 同上 | `127.0.0.1` の空きポートでサーバーを起動し、同梱クライアントが接続して `ServerStatus/State` を読む。IPv6 が使える環境では `[::1]` でも同じ疎通を見る（使えなければスキップ） |
 | 相互接続 | 別ワークフロー（`workflow_dispatch`、毎日、main への push、PR はパスで絞る） | 予定: Python asyncua クライアント、`mcr.microsoft.com/iotedge/opc-plc`。中身は未実装の TODO |
 | 手動 | 開発者の手元 | UaExpert から Browse / Read / Subscribe |
 | 後続 | 認証試験が要るとき | OPC Foundation Compliance Test Tool（CTT） |
@@ -87,17 +87,26 @@ banto の ADR-0011 に合わせ、配布は git タグを予定する。crates.i
 
 ## 既知の依存の注意
 
-`async-opcua-crypto` が `rsa` 0.9.10 を引き、RUSTSEC-2023-0071（Marvin Attack、タイミングサイドチャネル）が付いている。2026-09-12 時点で修正版は無い。Phase 1 のエンドポイントは SecurityPolicy `None` で、RSA の秘密操作はしない。`deny.toml` はこの advisory を、Phase 3 で RSA 系ポリシーを開くまでの期限付きで無視している。
+`rsa` 0.9.10（`async-opcua-crypto` 経由）の RUSTSEC-2023-0071 を、見直し期日付きで `deny.toml` が無視している。理由と期限は [ADR-0001](docs/adr/0001-async-opcua-base.md)。
 
-## オーナー判断待ち
+## 決定事項
 
-2026-10-11 の #201 レビューと、この足場を置いた時点で残っているもの。
+2026-10-15 のオーナー決定。
 
-1. **NodeId の永続性。** 外部名（リネームでクライアントの参照が切れる）か、OPC UA 専用の安定 ID か。core の `NodeId` は数値と文字列の両方を入れられるようにしてあり、どちらにも決めていない。
-2. **DataType。** レビューの最小案（`bit` → Boolean、収集済み数値 → Double、`string` は値公開しない）を core の暫定関数にしてある。スケーリング後の小数を整数型へキャストする実装にはしない。最終決定は未了。
-3. **品質。** Good / Bad / Stale だけを写す。Bad を `BadNoCommunication` とタグ単位エラーに分けない。Stale は `UncertainLastUsableValue`。この対応でよいかは未確認。
-4. **時刻。** SourceTimestamp は呼び出し側が渡した採取時刻で、Read のたびに今へ更新しない。ハブの `ptime_ms`（最後の試行時刻）をそのまま SourceTimestamp にしてよいかはハブ側の契約として未決。
-5. **削除されたノードの購読。** `BadNodeIdUnknown` の定数だけ置いた。通知の実装は Phase 2。
-6. **既定ポート。** ライブラリの既定は 4840。ハブが別ポートにするかはハブの設定で決める。
-7. **Phase 1 を None / Anonymous のまま LAN opt-in できるか。** ライブラリは bind を変えれば待受する。平文・匿名でどのタグが見えるかを、ハブの設定画面と運用条件に書く必要がある。
-8. **クライアント製品の issue。** クレートの箱だけある。スコープは未起票の別 issue。
+1. **NodeId。** 外部名 `{connection}.{group}.{tag}` を使う。`tag_id` は削除して作り直すと変わるため使わない。2026-09-30 の banto-industrial のオーナー決定に準拠する。core の `NodeId::external_name` がこの形を作る。数値 NodeId は標準ノード用に残す。
+2. **DataType。** 収集済みの数値は Double に固定する。`bit` は Boolean、`string` は周期収集の対象外なので値を公開しない。Int16 や Float には分けない。
+3. **品質。** Bad の細分化は後回しにし、現状を維持する。Good は Good、Bad は Bad、Stale は `UncertainLastUsableValue`（0x40900000）。
+4. **時刻。** Good の SourceTimestamp は採取時刻、Bad と Stale は品質を認識した時刻、不明なときは null。ハブ側の変更が必要なので、実装は Phase 2 とし、この足場は方針の記載のみ。
+5. **ポート。** 既定は 4840。設定で変更できる。
+6. **LAN 公開。** 条件付きで許可する。`advertised_host` を用意し、未指定アドレス（`0.0.0.0` / `::`）でそれが未設定なら起動はエラーになる。ループバック以外は明示したときだけ公開し、そのときは警告ログを出す。既定の bind は `127.0.0.1`。
+7. **edition。** 2024 のまま。
+
+クライアント製品のスコープは未起票の別 issue（ロードマップの「別 issue」）。
+
+## Phase 2 の検討事項
+
+実装はこの足場に入れない。方針だけを残す。
+
+- **削除されたノードの購読。** `BadNodeIdUnknown` を通知する。MonitoredItem は残し、同じ NodeId が戻ったら購読を再開する。実装は `notify_data_change`。定数 `StatusCode::BAD_NODE_ID_UNKNOWN` だけ置いてある。
+- **非有限値と bit。** NaN / Inf、および 0 と 1 以外の bit 値は Bad とする契約にする。現状のハブは NaN を null かつ Good で出す。
+- **品質だけの変化。** 値が変わらず品質だけ Good から Stale になったとき、通知が飛ばない。`DataChangeFilter` の trigger を `StatusValue` にする。

@@ -46,10 +46,9 @@ allow-git = []
 unmaintained = "workspace"
 unsound = "workspace"
 yanked = "warn"
-# RUSTSEC-2023-0071 は rsa 0.9.10（async-opcua-crypto 経由）のタイミング
-# サイドチャネル。advisory 自身が 2026-09-12 時点で修正版なしと書いている。
-# Phase 1 のエンドポイントは SecurityPolicy None で、RSA の秘密操作はしない。
-# Phase 3 で RSA 系ポリシーを開く前に、upstream の修正状況を見直す。
+# RUSTSEC-2023-0071（rsa 0.9.10、async-opcua-crypto 経由）。
+# 理由は docs/adr/0001-async-opcua-base.md。
+# 見直し期日: 2027-01-15、または Phase 3 着手時のいずれか早い方。
 ignore = [
-    { id = "RUSTSEC-2023-0071", reason = "async-opcua-crypto depends on rsa 0.9.10; no patched release. Phase 1 uses SecurityPolicy None only." },
+    { id = "RUSTSEC-2023-0071", reason = "See docs/adr/0001-async-opcua-base.md. Review by 2027-01-15 or when Phase 3 starts." },
 ]

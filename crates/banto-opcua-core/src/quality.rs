@@ -1,9 +1,8 @@
 //! banto-hub の品質（Good / Bad / Stale）を OPC UA StatusCode へ写す。
 //!
 //! 数値は OPC 10000-6 の StatusCode 表、async-opcua 0.19 の定数と一致する
-//! （サーバークレートの単体テストが突き合わせる）。Bad を通信断とタグ単位
-//! エラーに分けない。2026-10-11 のレビューが「今の情報で確実に言える対応に
-//! 絞る」としているため。
+//! （サーバークレートの単体テストが突き合わせる）。Bad の細分化はしない
+//! （2026-10-15 オーナー決定）。Good / Bad / Stale の 3 値を維持する。
 
 /// 収集側の品質。banto-hub の現在値は Good / Bad / Stale の 3 値。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -72,7 +71,7 @@ impl std::fmt::Display for StatusCode {
     }
 }
 
-/// 品質を StatusCode へ写す。暫定対応であり、通信断専用のコードは返さない。
+/// 品質を StatusCode へ写す。Bad の細分化はしない（2026-10-15 オーナー決定）。
 pub const fn status_code_for_quality(quality: Quality) -> StatusCode {
     match quality {
         Quality::Good => StatusCode::GOOD,
@@ -86,7 +85,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn good_bad_and_stale_map_to_the_provisional_codes() {
+    fn good_bad_and_stale_map_to_status_codes() {
         assert_eq!(status_code_for_quality(Quality::Good), StatusCode::GOOD);
         assert_eq!(status_code_for_quality(Quality::Bad), StatusCode::BAD);
         assert_eq!(

@@ -1,6 +1,6 @@
-//! アドレス空間に置くノードの形。識別子の永続化方針（外部名か安定 ID か）は
-//! 未決なので、この型はどちらの文字列も数値も入れられるようにしてある。
-//! 中身の方針は README の「オーナー判断待ち」。
+//! アドレス空間に置くノードの形。タグの NodeId は外部名
+//! `{connection}.{group}.{tag}` を使う（`tag_id` は削除して作り直すと変わる。
+//! banto-industrial のオーナー決定 2026-09-30 に準拠）。数値 NodeId は標準ノード用。
 
 use crate::DataType;
 
@@ -37,6 +37,14 @@ impl NodeId {
             namespace,
             identifier: Identifier::String(id.into()),
         }
+    }
+
+    /// 外部名 `{connection}.{group}.{tag}` の文字列 NodeId を作る。
+    ///
+    /// `tag_id` は削除して作り直すと変わるので使わない
+    /// （banto-industrial のオーナー決定 2026-09-30）。
+    pub fn external_name(namespace: u16, connection: &str, group: &str, tag: &str) -> Self {
+        Self::string(namespace, format!("{connection}.{group}.{tag}"))
     }
 }
 
@@ -124,6 +132,12 @@ mod tests {
             NodeId::string(2, "PLC1.Line1.Speed").to_string(),
             "ns=2;s=PLC1.Line1.Speed"
         );
+    }
+
+    #[test]
+    fn external_name_uses_connection_group_and_tag() {
+        let id = NodeId::external_name(2, "PLC1", "Line1", "Speed");
+        assert_eq!(id.to_string(), "ns=2;s=PLC1.Line1.Speed");
     }
 
     #[test]

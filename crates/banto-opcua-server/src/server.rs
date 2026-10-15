@@ -7,7 +7,10 @@ use std::net::SocketAddr;
 use opcua::server::{ANONYMOUS_USER_TOKEN_ID, ServerBuilder, ServerEndpoint, ServerHandle};
 use tokio::{net::TcpListener, task::JoinHandle};
 
-use crate::{Error, ServerConfig, endpoint_url};
+use crate::{
+    Error, ServerConfig,
+    config::{host_is_loopback, host_is_unspecified, normalize_endpoint_path},
+};
 
 /// サーバーを起動する入口。状態は持たない。
 #[derive(Debug, Default)]
@@ -16,16 +19,38 @@ pub struct OpcUaServer;
 impl OpcUaServer {
     /// 設定のアドレスで待受を始める。ポート `0` のときは空きポートを使う。
     ///
-    /// 返した [`RunningServer`] を落とすと待受を止める。明示的に止めるときは
-    /// [`RunningServer::shutdown`]。
+    /// 返した [`RunningServer`] を落とすと待受タスクを中止する。タスクの終了を
+    /// 待つときは [`RunningServer::shutdown`]。
+    ///
+    /// 未指定アドレス（`0.0.0.0` / `::`）で、`advertised_host` が無いときは
+    /// bind せずに [`Error::AdvertisedHostRequired`] を返す。ループバック以外へ
+    /// 公開するときは警告ログを出す。
     pub async fn start(config: ServerConfig) -> Result<RunningServer, Error> {
+        if config.bind.is_unspecified() && config.explicit_advertised_host().is_none() {
+            return Err(Error::AdvertisedHostRequired);
+        }
+        if config
+            .explicit_advertised_host()
+            .is_some_and(host_is_unspecified)
+        {
+            return Err(Error::AdvertisedHostRequired);
+        }
+
         let pki = tempfile::tempdir().map_err(Error::Pki)?;
         let listener = TcpListener::bind((config.bind, config.port))
             .await
             .map_err(Error::Bind)?;
         let local_addr = listener.local_addr().map_err(Error::Bind)?;
-        let path = normalize_path(&config.endpoint_path);
-        let endpoint = endpoint_url(local_addr, &path);
+        let path = normalize_endpoint_path(&config.endpoint_path);
+        let endpoint_host = config.endpoint_host(local_addr);
+        let endpoint = config.endpoint_url(local_addr);
+        if !config.bind.is_loopback() || !host_is_loopback(&endpoint_host) {
+            tracing::warn!(
+                bind = %config.bind,
+                advertised_host = %endpoint_host,
+                "OPC UA サーバーをループバック以外へ公開します。Phase 1 は SecurityPolicy None / Anonymous です"
+            );
+        }
 
         let (server, handle) = ServerBuilder::new()
             .application_name(config.application_name)
@@ -35,7 +60,7 @@ impl OpcUaServer {
             .certificate_path("own/cert.der")
             .private_key_path("private/private.pem")
             .pki_dir(pki.path())
-            .host(local_addr.ip().to_string())
+            .host(endpoint_host)
             .port(local_addr.port())
             .trust_client_certs(true)
             .add_endpoint(
@@ -46,26 +71,33 @@ impl OpcUaServer {
             .build()
             .map_err(Error::Build)?;
 
-        let task = tokio::spawn(async move { server.run_with(listener).await });
+        // 一時ディレクトリはタスクが所有する。Drop が先に消すと、停止前の
+        // サーバーが証明書を読めなくなる。
+        let task = tokio::spawn(async move {
+            let _pki = pki;
+            server.run_with(listener).await
+        });
 
         Ok(RunningServer {
             local_addr,
             endpoint,
             handle,
             task: Some(task),
-            _pki: pki,
         })
     }
 }
 
-/// 起動済みのサーバー。ドロップするとキャンセルする。
+/// 起動済みのサーバー。
+///
+/// [`Drop`] はキャンセルと `abort` だけを行い、停止完了は待たない。
+/// サンプル証明書の一時ディレクトリは待受タスクが所有するので、タスクが
+/// 終わるまで削除されない。停止完了を待つときは [`Self::shutdown`]。
 #[must_use = "シャットダウンするまで RunningServer を保持する"]
 pub struct RunningServer {
     local_addr: SocketAddr,
     endpoint: String,
     handle: ServerHandle,
     task: Option<JoinHandle<Result<(), String>>>,
-    _pki: tempfile::TempDir,
 }
 
 impl RunningServer {
@@ -80,6 +112,8 @@ impl RunningServer {
     }
 
     /// クライアントへ切断を知らせてからタスクの終了を待つ。
+    ///
+    /// [`Drop`] と違い、待受が戻るまで待つ。一時ディレクトリの削除はその後。
     pub async fn shutdown(mut self) -> Result<(), Error> {
         self.handle.cancel();
         let Some(task) = self.task.take() else {
@@ -105,16 +139,58 @@ impl std::fmt::Debug for RunningServer {
 impl Drop for RunningServer {
     fn drop(&mut self) {
         self.handle.cancel();
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
     }
 }
 
-/// エンドポイントパスを `/` 始まりにそろえる。空は `/`。
-fn normalize_path(endpoint_path: &str) -> String {
-    if endpoint_path.is_empty() || endpoint_path == "/" {
-        "/".to_owned()
-    } else if let Some(stripped) = endpoint_path.strip_prefix('/') {
-        format!("/{stripped}")
-    } else {
-        format!("/{endpoint_path}")
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn unspecified_bind_without_advertised_host_is_rejected() {
+        let err = OpcUaServer::start(ServerConfig {
+            bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            port: 0,
+            ..ServerConfig::default()
+        })
+        .await
+        .expect_err("advertised_host が必要");
+        assert!(matches!(err, Error::AdvertisedHostRequired));
+    }
+
+    #[tokio::test]
+    async fn advertising_an_unspecified_host_is_rejected() {
+        let err = OpcUaServer::start(ServerConfig {
+            advertised_host: Some("0.0.0.0".to_owned()),
+            port: 0,
+            ..ServerConfig::default()
+        })
+        .await
+        .expect_err("0.0.0.0 は公開ホストにできない");
+        assert!(matches!(err, Error::AdvertisedHostRequired));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn advertised_host_replaces_the_bound_address_in_the_endpoint() {
+        let server = OpcUaServer::start(ServerConfig {
+            bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            port: 0,
+            advertised_host: Some("127.0.0.1".to_owned()),
+            ..ServerConfig::default()
+        })
+        .await
+        .expect("server starts");
+        assert!(
+            server.endpoint().starts_with("opc.tcp://127.0.0.1:"),
+            "{}",
+            server.endpoint()
+        );
+        assert!(!server.endpoint().contains("0.0.0.0"));
+        server.shutdown().await.expect("server shuts down");
     }
 }

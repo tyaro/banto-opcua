@@ -11,7 +11,6 @@ function pr(files, want) {
   const { jobs } = classify({ event: "pull_request", files });
   assert.equal(jobs.run_rust, want.rust, `rust ${files.join(",")}`);
   assert.equal(jobs.run_deny, want.deny, `deny ${files.join(",")}`);
-  if (want.rust) assert.equal(jobs.rust_args, "--workspace");
 }
 
 test("docs だけの PR は Rust も deny も走らせない", () => {

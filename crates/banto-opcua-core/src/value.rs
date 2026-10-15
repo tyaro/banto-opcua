@@ -1,9 +1,8 @@
 //! banto のタグ型から、OPC UA へ公開する DataType を決める。
 //!
-//! 2026-10-11 のレビュー（tyaro/banto-industrial#201）の最小案:
-//! 現在値はスケーリング後の工学値なので、宣言型の整数へキャストしない。
-//! `bit` は Boolean、収集済みの数値は Double、`string` は周期収集の対象外
-//! なので値公開しない。これは足場であり、オーナー決定ではない。
+//! 2026-10-15 のオーナー決定。現在値はスケーリング後の工学値なので、宣言型の
+//! 整数へキャストしない。収集済みの数値は Double に固定する。`bit` は
+//! Boolean、`string` は周期収集の対象外なので値を公開しない。
 
 /// banto-hub のタグ型名に対応する分類。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -30,12 +29,12 @@ pub enum TagType {
     String,
 }
 
-/// 公開に使う OPC UA DataType の足場。数値の細分化はまだしない。
+/// 公開に使う OPC UA DataType。収集済みの数値は Double に固定する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DataType {
     /// OPC UA Boolean。`bit` の公開先。
     Boolean,
-    /// OPC UA Double。収集済み数値の公開先候補。
+    /// OPC UA Double。収集済み数値の公開先。
     Double,
 }
 
@@ -53,7 +52,7 @@ impl std::fmt::Display for DataType {
 pub enum PublishDecision {
     /// この DataType で公開する。
     Publish(DataType),
-    /// 値公開の対象外。ノードを作るかどうかは呼び出し側の未決事項。
+    /// 値を公開しない。`string` は周期収集の対象外。
     NotCollected,
 }
 
