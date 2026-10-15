@@ -19,6 +19,12 @@ async fn deleted_node_notifies_and_reappearing_node_resumes_the_same_subscriptio
     let server = OpcUaServer::start(ServerConfig::default().with_port(0))
         .await
         .expect("サーバーを起動する");
+    assert!(
+        server
+            .add_tag("Banto", "Cell1", "Speed", MappedValue::Double(10.0))
+            .is_err(),
+        "ルートフォルダーと衝突する接続名は拒否する"
+    );
     server
         .add_tag("PLC2", "Cell1", "Speed", MappedValue::Double(10.0))
         .expect("動的タグを登録する");

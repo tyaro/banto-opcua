@@ -204,6 +204,11 @@ impl FixedTags {
 }
 
 fn validate_path(connection: &str, group: &str, tag: &str) -> Result<(), Error> {
+    if connection == "Banto" {
+        return Err(Error::TagUpdate(
+            "Banto はルートフォルダーの予約名です".to_owned(),
+        ));
+    }
     if [connection, group, tag]
         .into_iter()
         .any(|part| part.is_empty() || part.contains('.'))

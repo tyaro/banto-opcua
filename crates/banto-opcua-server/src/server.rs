@@ -149,7 +149,8 @@ impl RunningServer {
 
     /// `{connection}.{group}.{tag}` の読み取り専用タグを追加する。
     /// 同じ NodeId が既にあればエラー。接続・グループのフォルダーは必要なら作る。
-    /// 各名前は空文字と `.` を含めない。初期値には登録時刻を付ける試験用 API。
+    /// 各名前は空文字と `.` を含めず、接続名 `Banto` は予約済み。
+    /// 初期値には登録時刻を付ける試験用 API。
     /// ハブの実データと SourceTimestamp の結合は banto-industrial #201 で行う。
     pub fn add_tag(
         &self,
