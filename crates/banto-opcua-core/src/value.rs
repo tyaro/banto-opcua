@@ -84,7 +84,9 @@ pub enum MappedValue {
 }
 
 /// 現在値と品質を写した結果。サーバー側で DataValue に変換する。
+/// #8 の時刻などを後から追加できるよう、外部クレートでの構造体リテラルは認めない。
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct MappedReading {
     /// 無効な値、欠損値、Bad 品質では `None`。
     pub value: Option<MappedValue>,
@@ -97,6 +99,7 @@ pub struct MappedReading {
 /// 呼び出し側は先に [`publish_decision`] で公開対象を選ぶ。非有限値と 0 / 1
 /// 以外の bit は丸めず、値なし・汎用 Bad にする。品質が Bad、または値がない
 /// 場合も値なし・Bad にする。有効な値の Stale は最後の値を保持する。
+/// Stale でも値が無効なら値なし・Bad を優先する。
 pub fn map_current_value(
     data_type: DataType,
     value: Option<f64>,
@@ -190,6 +193,7 @@ mod tests {
     fn bit_accepts_only_zero_and_one() {
         for (input, expected) in [
             (0.0, Some(false)),
+            (-0.0, Some(false)),
             (1.0, Some(true)),
             (0.5, None),
             (2.0, None),
@@ -231,6 +235,33 @@ mod tests {
             MappedReading {
                 value: Some(MappedValue::Double(42.0)),
                 status: StatusCode::UNCERTAIN_LAST_USABLE_VALUE,
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_value_overrides_stale_and_bad_quality_discards_boolean_value() {
+        for (data_type, value) in [(DataType::Double, f64::NAN), (DataType::Boolean, 2.0)] {
+            assert_eq!(
+                map_current_value(data_type, Some(value), Quality::Stale),
+                MappedReading {
+                    value: None,
+                    status: StatusCode::BAD,
+                }
+            );
+        }
+        assert_eq!(
+            map_current_value(DataType::Boolean, Some(1.0), Quality::Stale),
+            MappedReading {
+                value: Some(MappedValue::Boolean(true)),
+                status: StatusCode::UNCERTAIN_LAST_USABLE_VALUE,
+            }
+        );
+        assert_eq!(
+            map_current_value(DataType::Boolean, Some(1.0), Quality::Bad),
+            MappedReading {
+                value: None,
+                status: StatusCode::BAD,
             }
         );
     }
