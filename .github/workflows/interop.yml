@@ -80,7 +80,7 @@ jobs:
             mcr.microsoft.com/iotedge/opc-plc@sha256:3d16f104393869540403390e617a2d6afe98b3b0673fb9d8ff1533f35b6726cf \
             --ut --aa --pn=50000 --ph=0.0.0.0
           for attempt in {1..60}; do
-            if docker logs banto-opcua-interop 2>&1 | rg -q 'OPC UA Server started'; then
+            if docker logs banto-opcua-interop 2>&1 | grep -q 'OPC UA Server started'; then
               exit 0
             fi
             if [ "$(docker inspect -f '{{.State.Running}}' banto-opcua-interop)" != true ]; then
