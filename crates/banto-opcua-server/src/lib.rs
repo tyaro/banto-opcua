@@ -24,8 +24,8 @@ pub use server::{OpcUaServer, RunningServer};
 pub mod model {
     #[doc(inline)]
     pub use banto_opcua_core::{
-        AccessLevel, DataType, Identifier, NodeClass, NodeId, PublishDecision, Quality, StatusCode,
-        TagType, VariableNode,
+        AccessLevel, DataType, Identifier, MappedReading, MappedValue, NodeClass, NodeId,
+        PublishDecision, Quality, StatusCode, TagType, VariableNode,
     };
 }
 

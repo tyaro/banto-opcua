@@ -8,7 +8,7 @@
 //! 漏らさないため（ADR-0001）。
 //!
 //! 写像の方針はリポジトリ README の「決定事項」（2026-10-15）。削除ノードの
-//! 購読、非有限値、品質だけの変化通知は Phase 2 で、ここには置かない。
+//! 購読と品質だけの変化通知は Phase 2 で扱う。非有限値の判定は core に置く。
 
 mod node;
 mod quality;
@@ -18,4 +18,7 @@ mod value;
 pub use node::{AccessLevel, Identifier, NodeClass, NodeId, VariableNode};
 pub use quality::{Quality, StatusCode, status_code_for_quality};
 pub use time::{SampleTimestamps, UNIX_EPOCH_TICKS, opcua_ticks_from_system_time};
-pub use value::{DataType, PublishDecision, TagType, publish_decision};
+pub use value::{
+    DataType, MappedReading, MappedValue, PublishDecision, TagType, map_current_value,
+    publish_decision,
+};
