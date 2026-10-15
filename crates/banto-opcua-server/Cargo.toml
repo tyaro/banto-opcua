@@ -1,5 +1,5 @@
-# 読み取り専用 OPC UA サーバーの足場。待受と停止、標準アドレス空間での
-# 疎通まで。タグのアドレス空間はまだ作らない（#201 Phase 1 の続き）。
+# 読み取り専用 OPC UA サーバー。Phase 1 は固定タグの Browse / Read /
+# Subscription まで。ハブのタグレジストリは Phase 2 で接続する。
 [package]
 name = "banto-opcua-server"
 description = "banto OPC UA サーバー（足場）。既定の待受は 127.0.0.1、初期スコープは読み取り専用"

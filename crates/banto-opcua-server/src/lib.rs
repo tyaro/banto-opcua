@@ -8,11 +8,12 @@
 //! 未指定アドレス（`0.0.0.0` / `::`）で待受するときは `advertised_host` が
 //! 必須。ループバック以外への公開は明示したときだけで、警告ログを出す。
 //!
-//! タグのアドレス空間はまだ作らない。起動すると async-opcua の標準
-//! 名前空間だけが載る。プロセス内の疎通は `tests/in_process.rs`。
+//! Phase 1 の固定タグ `Speed` / `Running` を Browse / Read / Subscribe
+//! できる。プロセス内の疎通は `tests/fixed_tags.rs`。
 
 mod config;
 mod error;
+mod fixed_tags;
 mod server;
 
 pub use config::ServerConfig;
