@@ -142,18 +142,8 @@ async fn deleted_node_notifies_and_reappearing_node_resumes_the_same_subscriptio
     server
         .remove_tag("PLC2", "Cell1", "Speed")
         .expect("タグを削除する");
-    assert_change(
-        &mut receiver,
-        Some(Variant::Empty),
-        StatusCode::BadNodeIdUnknown,
-    )
-    .await;
-    assert_change(
-        &mut ranged_receiver,
-        Some(Variant::Empty),
-        StatusCode::BadIndexRangeDataMismatch,
-    )
-    .await;
+    assert_change(&mut receiver, None, StatusCode::BadNodeIdUnknown).await;
+    assert_change(&mut ranged_receiver, None, StatusCode::BadNodeIdUnknown).await;
     assert_eq!(
         read_value(&session, &speed).await.status(),
         StatusCode::BadNodeIdUnknown
@@ -183,18 +173,8 @@ async fn deleted_node_notifies_and_reappearing_node_resumes_the_same_subscriptio
     server
         .remove_tag("PLC2", "Cell1", "Speed")
         .expect("旧名を削除する");
-    assert_change(
-        &mut receiver,
-        Some(Variant::Empty),
-        StatusCode::BadNodeIdUnknown,
-    )
-    .await;
-    assert_change(
-        &mut ranged_receiver,
-        Some(Variant::Empty),
-        StatusCode::BadIndexRangeDataMismatch,
-    )
-    .await;
+    assert_change(&mut receiver, None, StatusCode::BadNodeIdUnknown).await;
+    assert_change(&mut ranged_receiver, None, StatusCode::BadNodeIdUnknown).await;
     server
         .add_tag("PLC2", "Cell1", "Velocity", MappedValue::Double(12.0))
         .expect("新名を登録する");

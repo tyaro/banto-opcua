@@ -174,7 +174,7 @@ impl FixedTags {
         );
         after_insert();
         // 初期値の保存と通知まで write ロックで排他し、削除・再登録との逆転を防ぐ。
-        // 監視項目ごとの IndexRange / DataEncoding はノードから読み直して反映する。
+        // 通常の値更新と同じ sampler で監視項目ごとにノードを読み直す。
         handle.subscriptions().maybe_notify(
             [(&tag_id, AttributeId::Value)].into_iter(),
             |id, attribute, range, encoding| {
@@ -207,7 +207,7 @@ impl FixedTags {
         handle.subscriptions().notify_data_change(
             [(
                 DataValue {
-                    value: Some(Variant::Empty),
+                    value: None,
                     status: Some(StatusCode::BadNodeIdUnknown),
                     source_timestamp: Some(now),
                     server_timestamp: Some(now),
