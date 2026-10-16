@@ -376,6 +376,15 @@ async fn dynamic_readings_keep_type_quality_and_timestamps_through_subscription(
             ),
         )
         .expect("非有限値を Bad に写す");
+    // 購読経路でも Read と同じ写像（値なし・Bad・採取時刻）で届く。
+    assert_change(
+        &mut receiver,
+        Some(Variant::Empty),
+        StatusCode::Bad,
+        Some(500),
+        510,
+    )
+    .await;
     assert_reading(
         &read_attribute(&session, &speed, AttributeId::Value).await,
         Some(Variant::Empty),
