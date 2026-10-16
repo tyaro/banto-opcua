@@ -1,8 +1,11 @@
 //! ノード削除後も購読を保ち、同じ NodeId の復帰とリネームを確認する。
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
-use banto_opcua_server::{OpcUaServer, ServerConfig, model::MappedValue};
+use banto_opcua_server::{
+    OpcUaServer, ServerConfig, TagReading,
+    model::{DataType, MappedValue, Quality, SampleTimestamps},
+};
 use opcua::{
     client::{ClientBuilder, DataChangeCallback, IdentityToken, Session},
     crypto::SecurityPolicy,
@@ -19,12 +22,9 @@ async fn deleted_node_notifies_and_reappearing_node_resumes_the_same_subscriptio
     let server = OpcUaServer::start(ServerConfig::default().with_port(0))
         .await
         .expect("サーバーを起動する");
-    assert!(
-        server
-            .add_tag("Banto", "Cell1", "Speed", MappedValue::Double(10.0))
-            .is_err(),
-        "ルートフォルダーと衝突する接続名は拒否する"
-    );
+    server
+        .add_tag("Banto", "Cell1", "Speed", MappedValue::Double(10.0))
+        .expect("ルートと同名の接続も独立したフォルダーで登録する");
     server
         .add_tag("PLC2", "Cell1", "Speed", MappedValue::Double(10.0))
         .expect("動的タグを登録する");
@@ -68,6 +68,19 @@ async fn deleted_node_notifies_and_reappearing_node_resumes_the_same_subscriptio
         browse_names(&session, banto)
             .await
             .contains(&"PLC2".to_owned())
+    );
+    let same_named_connection = browse_child(&session, NodeId::new(ns, "Banto"), "Banto").await;
+    assert_ne!(same_named_connection, NodeId::new(ns, "Banto"));
+    assert!(
+        browse_names(&session, same_named_connection)
+            .await
+            .contains(&"Cell1".to_owned())
+    );
+    assert_eq!(
+        read_value(&session, &NodeId::new(ns, "Banto.Cell1.Speed"))
+            .await
+            .value,
+        Some(Variant::Double(10.0))
     );
     let cell = NodeId::new(ns, "PLC2.Cell1");
     assert!(
@@ -197,12 +210,92 @@ async fn deleted_node_notifies_and_reappearing_node_resumes_the_same_subscriptio
         "旧 NodeId の MonitoredItem に新ノードの値は届かない"
     );
 
+    // Hub のタグ名はドットを許す。フォルダー NodeId の衝突を避けながら
+    // BrowseName と外部名の Variable NodeId をそのまま公開する。
+    server
+        .add_tag("PLC.3", "Cell.2", "Speed.1", MappedValue::Double(13.0))
+        .expect("ドット入り名のタグを登録する");
+    let connection = browse_child(&session, NodeId::new(ns, "Banto"), "PLC.3").await;
+    let group = browse_child(&session, connection, "Cell.2").await;
+    let dotted = browse_child(&session, group, "Speed.1").await;
+    assert_eq!(dotted, NodeId::new(ns, "PLC.3.Cell.2.Speed.1"));
+    assert_eq!(
+        read_value(&session, &dotted).await.value,
+        Some(Variant::Double(13.0))
+    );
+    server
+        .remove_tag("PLC.3", "Cell.2", "Speed.1")
+        .expect("ドット入り名のタグを削除する");
+    assert_eq!(
+        read_value(&session, &dotted).await.status(),
+        StatusCode::BadNodeIdUnknown
+    );
+
+    // 同じ外部名になる別の分割から、既存タグを更新・削除してはならない。
+    server
+        .add_tag("a.b", "c", "d", MappedValue::Double(14.0))
+        .expect("元の階層に登録する");
+    let ambiguous = NodeId::new(ns, "a.b.c.d");
+    for (connection, group, tag) in [("a", "b.c", "d"), ("a", "b", "c.d")] {
+        assert!(
+            server
+                .add_tag(connection, group, tag, MappedValue::Double(15.0))
+                .is_err(),
+            "別の分割での二重登録を拒否する"
+        );
+        assert!(
+            server
+                .update_tag_reading(
+                    connection,
+                    group,
+                    tag,
+                    TagReading::new(
+                        DataType::Double,
+                        Some(15.0),
+                        Quality::Good,
+                        SampleTimestamps::new(None, SystemTime::now()),
+                    ),
+                )
+                .is_err(),
+            "別の分割からの更新を拒否する"
+        );
+        assert!(
+            server.remove_tag(connection, group, tag).is_err(),
+            "別の分割からの削除を拒否する"
+        );
+        assert_eq!(
+            read_value(&session, &ambiguous).await.value,
+            Some(Variant::Double(14.0)),
+            "拒否後も元の値を保持する"
+        );
+    }
+    server
+        .remove_tag("a.b", "c", "d")
+        .expect("元の分割からは削除できる");
+
     session.disconnect().await.expect("クライアントを切断する");
     task.abort();
     server.shutdown().await.expect("サーバーを停止する");
 }
 
 async fn browse_names(session: &Session, parent: NodeId) -> Vec<String> {
+    browse_children(session, parent)
+        .await
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
+}
+
+async fn browse_child(session: &Session, parent: NodeId, name: &str) -> NodeId {
+    browse_children(session, parent)
+        .await
+        .into_iter()
+        .find(|(child_name, _)| child_name == name)
+        .unwrap_or_else(|| panic!("BrowseName {name} が見つからない"))
+        .1
+}
+
+async fn browse_children(session: &Session, parent: NodeId) -> Vec<(String, NodeId)> {
     let result = session
         .browse(
             &[BrowseDescription {
@@ -224,7 +317,12 @@ async fn browse_names(session: &Session, parent: NodeId) -> Vec<String> {
         .as_ref()
         .into_iter()
         .flatten()
-        .map(|reference| reference.browse_name.name.to_string())
+        .map(|reference| {
+            (
+                reference.browse_name.name.to_string(),
+                reference.node_id.node_id.clone(),
+            )
+        })
         .collect()
 }
 

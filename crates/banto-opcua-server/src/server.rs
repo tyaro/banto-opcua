@@ -13,7 +13,7 @@ use tokio::{net::TcpListener, task::JoinHandle};
 use banto_opcua_core::{DataType, MappedValue, Quality, map_current_value};
 
 use crate::{
-    Error, ServerConfig,
+    Error, ServerConfig, TagReading,
     config::{
         host_is_loopback, host_is_unspecified, normalize_endpoint_path, valid_advertised_host,
     },
@@ -74,7 +74,7 @@ impl OpcUaServer {
         }
 
         let namespace_uri = config.namespace_uri.clone();
-        let (server, handle) = ServerBuilder::new()
+        let mut builder = ServerBuilder::new()
             .application_name(config.application_name)
             .application_uri(config.application_uri)
             .product_uri(config.product_uri)
@@ -90,10 +90,12 @@ impl OpcUaServer {
                 ServerEndpoint::new_none(&path, &[ANONYMOUS_USER_TOKEN_ID.to_owned()]),
             )
             .discovery_urls(vec![endpoint.clone()])
-            .with_node_manager(fixed_tags::node_manager(namespace_uri.clone()))
-            .build()
-            .map_err(Error::Build)?;
-        let fixed_tags = FixedTags::register(&handle, &namespace_uri)?;
+            .with_node_manager(fixed_tags::node_manager(namespace_uri.clone()));
+        // async-opcua の既定値 100 ms は 0 要求も補正する。厳密な採取時刻が
+        // 必要なクライアントには、実際に 0 ms の監視項目を作れるようにする。
+        builder.limits_mut().subscriptions.min_sampling_interval_ms = 0.0;
+        let (server, handle) = builder.build().map_err(Error::Build)?;
+        let fixed_tags = FixedTags::register(&handle, &namespace_uri, config.sample_tags)?;
 
         // 一時ディレクトリはタスクが所有する。Drop が先に消すと、停止前の
         // サーバーが証明書を読めなくなる。
@@ -149,7 +151,7 @@ impl RunningServer {
 
     /// `{connection}.{group}.{tag}` の読み取り専用タグを追加する。
     /// 同じ NodeId が既にあればエラー。接続・グループのフォルダーは必要なら作る。
-    /// 各名前は空文字と `.` を含めず、接続名 `Banto` は予約済み。
+    /// 各名前は空文字にできない。ドットと接続名 `Banto` は使用できる。
     /// 初期値には登録時刻を付ける試験用 API。
     /// ハブの実データと SourceTimestamp の結合は banto-industrial #201 で行う。
     pub fn add_tag(
@@ -170,6 +172,44 @@ impl RunningServer {
         };
         self.fixed_tags
             .add_tag(&self.handle, connection, group, tag, value)
+    }
+
+    /// 実データの型・品質・時刻を保持したまま、読み取り専用タグを登録する。
+    /// 値が未取得でも DataType は `reading.data_type` で確定する。
+    pub fn add_tag_reading(
+        &self,
+        connection: &str,
+        group: &str,
+        tag: &str,
+        reading: TagReading,
+    ) -> Result<(), Error> {
+        self.fixed_tags.add_tag_reading(
+            &self.handle,
+            connection,
+            group,
+            tag,
+            reading.data_type,
+            reading.data_value(),
+        )
+    }
+
+    /// 登録済みタグの値・品質・時刻を更新し、購読者へ変更を通知する。
+    /// DataType の変更は同じ NodeId への更新ではなく削除・再登録で行う。
+    pub fn update_tag_reading(
+        &self,
+        connection: &str,
+        group: &str,
+        tag: &str,
+        reading: TagReading,
+    ) -> Result<(), Error> {
+        self.fixed_tags.update_tag_reading(
+            &self.handle,
+            connection,
+            group,
+            tag,
+            reading.data_type,
+            reading.data_value(),
+        )
     }
 
     /// タグを削除し、既存の購読へ `BadNodeIdUnknown` を通知する。

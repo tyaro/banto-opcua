@@ -15,6 +15,7 @@ PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read �
 フィルタ未指定の実 Subscription で品質変更を検証した。
 [#5](https://github.com/tyaro/banto-opcua/issues/5) のタグ追加・削除と
 削除後の購読継続も本リポジトリで実装した。
+動的タグの実データ向け登録・更新 API と、サンプルタグを外す設定を追加した。
 ハブとの接続、管理 UI、Windows Service は未実装。
 以下は依存関係に沿った作業順であり、各段階を独立した PR で検証する。
 
@@ -64,6 +65,10 @@ PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read �
   Browse / Read で確かめる。追加 API の初期値は試験用に登録時刻を付ける。
   空になった接続・グループのフォルダーは、同じ階層への再登録に備えて残す。
   ハブのタグレジストリと実データの時刻との結合は #201 で行う。
+- #201 の結合前提として、動的タグの型・品質・時刻を渡す
+  `TagReading` と登録・更新 API を用意した（[ADR-0002](adr/0002-dynamic-reading-boundary.md)）。
+  ハブはサンプルタグを無効にしてから実タグを登録する。レジストリの照合、
+  Stale を含む現在値の反映、設定・管理 UI・Windows Service はハブ側で行う。
 - #9 の Python 経路は段階 1 の後に先行できる。opc-plc 経路には、現状の
   `ServerStatus/State` 専用 Read より広い、NodeId を指定する最小限の
   クライアント Read API が要る。#9 の外部テストで UInt32 タグの Read API を

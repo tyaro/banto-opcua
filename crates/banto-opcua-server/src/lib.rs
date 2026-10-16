@@ -9,16 +9,19 @@
 //! 必須。ループバック以外への公開は明示したときだけで、警告ログを出す。
 //!
 //! Phase 1 の固定タグ `Speed` / `Running` に加え、タグの追加・削除と
-//! 同じ NodeId の復帰を扱う。プロセス内の疎通は `tests/fixed_tags.rs` と
-//! `tests/dynamic_nodes.rs`。
+//! 同じ NodeId の復帰、実タグの品質・時刻付き更新を扱う。
+//! プロセス内の疎通は `tests/fixed_tags.rs`、`tests/dynamic_nodes.rs`、
+//! `tests/tag_readings.rs`。
 
 mod config;
 mod error;
 mod fixed_tags;
+mod reading;
 mod server;
 
 pub use config::ServerConfig;
 pub use error::Error;
+pub use reading::TagReading;
 pub use server::{OpcUaServer, RunningServer};
 
 /// タグノードの語彙。プロトコル実装の型ではなく core の型を公開する。
@@ -26,7 +29,7 @@ pub mod model {
     #[doc(inline)]
     pub use banto_opcua_core::{
         AccessLevel, DataType, Identifier, MappedReading, MappedValue, NodeClass, NodeId,
-        PublishDecision, Quality, StatusCode, TagType, VariableNode,
+        PublishDecision, Quality, SampleTimestamps, StatusCode, TagType, VariableNode,
     };
 }
 

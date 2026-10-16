@@ -27,6 +27,8 @@ pub struct ServerConfig {
     /// 名前空間との重複は起動時に拒否する。async-opcua 0.19 が自動登録するのは
     /// 標準 URI と ApplicationUri の 2 つで、固定タグはそれらと別の URI を使う。
     pub namespace_uri: String,
+    /// Phase 1 のサンプルタグを登録する。ハブの実タグを公開するときは無効にする。
+    pub sample_tags: bool,
     /// エンドポイント URL と discovery URL に載せるホスト。
     ///
     /// 未設定なら bind した具体的なアドレスを載せる。未指定アドレス
@@ -45,6 +47,7 @@ impl Default for ServerConfig {
             application_uri: "urn:banto:opcua:server".to_owned(),
             product_uri: "urn:banto:opcua".to_owned(),
             namespace_uri: "urn:banto:opcua:tags".to_owned(),
+            sample_tags: true,
             advertised_host: None,
         }
     }
@@ -90,6 +93,12 @@ impl ServerConfig {
     /// タグの名前空間 URI を設定する。
     pub fn with_namespace_uri(mut self, uri: impl Into<String>) -> Self {
         self.namespace_uri = uri.into();
+        self
+    }
+
+    /// Phase 1 のサンプルタグを登録するか選ぶ。
+    pub fn with_sample_tags(mut self, enabled: bool) -> Self {
+        self.sample_tags = enabled;
         self
     }
 

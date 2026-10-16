@@ -29,17 +29,20 @@ ADR-0002 は「依存を足さない」を既定にしつつ、自前実装が�
 
 フィルタ未指定の購読で品質変更を通知する [upstream PR #274](https://github.com/FreeOpcUa/async-opcua/pull/274)
 は 0.19.0 公開後にマージされた。#7 の実 Subscription 試験を通すため、修正を含む
-`1ba60ed14177a2590ee75526af40602987a14123` を一時的に固定する。
-次の公開版に修正が入ったら crates.io 依存へ戻す（[#17](https://github.com/tyaro/banto-opcua/issues/17)）。
-このコミットには 0.19.0 以降の別の upstream 変更も含まれるため、依存更新時は
+`1ba60ed14177a2590ee75526af40602987a14123` を基点とする。
+2026-10-16、非ゼロの sampling interval で採取時刻を失う不具合を直した
+[MPL-2.0 の fork](https://github.com/tyaro/async-opcua/pull/1) の
+`60c4f9d72218d78177e59c70a03db7fddcf9d857` を一時的に固定した。
+このコミットは fork の保全用タグ `banto-source-timestamp-20261016` でも保持する。
+sampling interval が -1 のときは実際の購読周期まで最新値だけを保留する。
+両修正を含む公開版が出たら crates.io 依存へ戻す（[#17](https://github.com/tyaro/banto-opcua/issues/17)）。
+基点の upstream コミットには 0.19.0 以降の別の変更も含まれるため、依存更新時は
 回帰テストと cargo-deny を実行する。
 
-banto-industrial の `deny.toml` は `unknown-git = "deny"` で、`allow-git` に
-async-opcua の URL がない。ハブへ取り込むタグは、#17 で crates.io 版へ戻した後に
-切るか、それより先に取り込む場合は banto-industrial の `allow-git` に
-`https://github.com/FreeOpcUa/async-opcua` を一時的に加え、そのリポジトリの
-cargo-deny を通す。industrial 側の `required-git-spec = "tag"` は最低要件であり、
-本依存の `rev` 指定はこれを満たす。追加した許可は #17 の公開版への移行後に削除する。
+banto-industrial の `deny.toml` は `unknown-git = "deny"` のため、fork の
+`https://github.com/tyaro/async-opcua` を一時的に `allow-git` へ追加して
+cargo-deny を通す。`required-git-spec = "tag"` は最低要件であり、より厳しい
+`rev` 固定も満たすため維持する。追加した許可は #17 の公開版への移行後に削除する。
 
 - `banto-opcua-server` は feature `server`（標準アドレス空間を含む）だけを有効にする。
 - `banto-opcua-client` は feature `client` だけを有効にする。

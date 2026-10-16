@@ -30,9 +30,19 @@ crates/
 `banto-opcua-core` は async-opcua に依存しない。サーバーとクライアントが
 境界で core の型と async-opcua の型を変換する。
 
-Phase 1 の固定タグを公開する。`Objects/Banto/PLC1/Line1` の `Speed` と
-`Running` を Browse / Read / Subscribe できる。ハブのタグレジストリ、
-設定 UI はまだ接続していない。
+Phase 1 の固定タグを既定で公開する。`Objects/Banto/PLC1/Line1` の `Speed` と
+`Running` を Browse / Read / Subscribe できる。`ServerConfig::with_sample_tags(false)`
+で試験用タグを外し、同じ外部名の実タグを登録できる。
+`RunningServer::add_tag_reading` / `update_tag_reading` は型・値・品質・時刻を
+`TagReading` で受け取り、読み取り専用の Read / Subscription へ反映する。
+未取得でも DataType を保持し、SourceTimestamp が不明なら null のままにする。
+ドットを含む名前も Browse でき、Variable NodeId は外部名のまま保持する。
+Read と 0 ms / 非ゼロの sampling interval の購読で、入力した SourceTimestamp を
+保持する。サーバーの最小値を 0 ms に設定し、購読作成応答でも要求した間隔を確認する。
+遅延したサンプルの時刻を保持する async-opcua の修正は、MPL-2.0 の
+[別リポジトリ](https://github.com/tyaro/async-opcua/pull/1)で公開している。
+この境界の理由は [ADR-0002](docs/adr/0002-dynamic-reading-boundary.md) に記す。
+ハブのタグレジストリ、設定 UI はまだ接続していない。
 
 ## ロードマップ（banto-industrial #201）
 
@@ -137,5 +147,5 @@ banto の ADR-0011 に合わせ、配布は git タグを予定する。crates.i
 ハブとの結合に必要な残件を記録する。
 
 - **削除されたノードの購読。** タグを削除すると `BadNodeIdUnknown` を通知する。MonitoredItem を残し、同じ NodeId が戻ったら購読を再開する。リネームは旧ノードの削除と新ノードの追加で表す。実 Subscription テストで検証済み。ハブのタグレジストリとの結合は後続。
-- **非有限値と bit。** core の値・品質変換をハブの現在値へ接続する。現状のハブは NaN を null かつ Good で出す。共通の読み取り契約は [banto-industrial #615](https://github.com/tyaro/banto-industrial/issues/615) で未決定。
+- **非有限値と bit。** core の値・品質変換をハブの現在値へ接続する。Hub の共通読み取りは [banto-industrial #615](https://github.com/tyaro/banto-industrial/issues/615) で値なし・Bad に統一された。
 - **品質だけの変化。** [async-opcua PR #274](https://github.com/FreeOpcUa/async-opcua/pull/274) の修正済みコミットを固定し、フィルタ未指定でも Good → Stale → Good の通知を実 Subscription テストで確認した。Good → Bad では core の契約どおり値を Null にして通知し、復帰も確認した。公開版への依存復帰と Null Variant 回避策の見直しは [#17](https://github.com/tyaro/banto-opcua/issues/17) で追跡する。ハブの実タグとの結合は後続。
