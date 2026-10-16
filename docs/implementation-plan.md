@@ -1,6 +1,6 @@
 # OPC UA 実装計画
 
-- 更新日: 2026-10-15
+- 更新日: 2026-10-16
 - 親課題: [banto-industrial #201](https://github.com/tyaro/banto-industrial/issues/201)
 - 対象: 本リポジトリの [#3〜#9](https://github.com/tyaro/banto-opcua/issues)
 
@@ -15,8 +15,10 @@ PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read �
 フィルタ未指定の実 Subscription で品質変更を検証した。
 [#5](https://github.com/tyaro/banto-opcua/issues/5) のタグ追加・削除と
 削除後の購読継続も本リポジトリで実装した。
-動的タグの実データ向け登録・更新 API と、サンプルタグを外す設定を追加した。
-ハブとの接続、管理 UI、Windows Service は未実装。
+動的タグの実データ向け登録・更新 API と、サンプルタグを外す設定を追加した（PR #20）。
+ハブとの接続と管理 API は banto-industrial #627、外部クライアントによる
+ハブの確認は banto-industrial #632 で実装した。Windows Service と UaExpert の
+実機確認、Phase 3 のセキュリティは未実施。
 以下は依存関係に沿った作業順であり、各段階を独立した PR で検証する。
 
 | 段階 | 作業 | 完了条件 |

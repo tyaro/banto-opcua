@@ -42,7 +42,12 @@ Read と 0 ms / 非ゼロの sampling interval の購読で、入力した Sourc
 遅延したサンプルの時刻を保持する async-opcua の修正は、MPL-2.0 の
 [別リポジトリ](https://github.com/tyaro/async-opcua/pull/1)で公開している。
 この境界の理由は [ADR-0002](docs/adr/0002-dynamic-reading-boundary.md) に記す。
-ハブのタグレジストリ、設定 UI はまだ接続していない。
+`ServerConfig::with_pki_dir` を指定すると、自己署名の鍵と証明書を初回だけ作り、
+以降の起動で再利用する。未指定なら起動ごとに一時ディレクトリへ作る
+（[ADR-0003](docs/adr/0003-persistent-pki-dir.md)）。
+ハブ（banto-industrial）は [#627](https://github.com/tyaro/banto-industrial/pull/627) で
+タグレジストリと現在値をこの API へ接続し、管理 API から有効化できる。
+外部クライアントからの確認は [#632](https://github.com/tyaro/banto-industrial/pull/632)。
 
 ## ロードマップ（banto-industrial #201）
 
@@ -134,8 +139,8 @@ banto の ADR-0011 に合わせ、配布は git タグを予定する。crates.i
 
 1. **NodeId。** 外部名 `{connection}.{group}.{tag}` を使う。`tag_id` は削除して作り直すと変わるため使わない。2026-09-30 の banto-industrial のオーナー決定に準拠する。core の `NodeId::external_name` がこの形を作る。数値 NodeId は標準ノード用に残す。
 2. **DataType。** 収集済みの数値は Double に固定する。`bit` は Boolean、`string` は周期収集の対象外なので値を公開しない。Int16 や Float には分けない。
-3. **品質と値。** Bad の細分化は後回しにする。有効な値では Good は Good、Stale は `UncertainLastUsableValue`（0x40900000）として最後の値を保持する。Bad 品質や欠損値は値なし・汎用 `Bad`（0x80000000）。Double の NaN / ±Inf、Boolean に写す bit の 0 / 1 以外も値なし・汎用 `Bad` とし、丸めない。Stale でも値が無効なら Bad を優先する。bit の `-0.0` は `0.0` と同じ false として扱う。core の `map_current_value` がこの契約を実装する。REST / WS / gRPC と共通化するかは [banto-industrial #615](https://github.com/tyaro/banto-industrial/issues/615) で検討中。
-4. **時刻。** Good の SourceTimestamp は採取時刻、Bad と Stale は品質を認識した時刻（または実際に復旧を試みた時刻）、不明なときは null。別の時刻や Read 時の現在時刻では補わない。core の `SampleTimestamps::for_quality` に写像を実装した。引数の品質はハブの入力品質であり、Good の無効値が Bad に写った場合は採取時刻を異常の観測時刻とみなす。固定タグの既存経路では、反復 Read でも保存済み SourceTimestamp が変わらないことを確認した。ハブの実データへの接続には [banto-industrial #614](https://github.com/tyaro/banto-industrial/issues/614) の時刻提供が必要。
+3. **品質と値。** Bad の細分化は後回しにする。有効な値では Good は Good、Stale は `UncertainLastUsableValue`（0x40900000）として最後の値を保持する。Bad 品質や欠損値は値なし・汎用 `Bad`（0x80000000）。Double の NaN / ±Inf、Boolean に写す bit の 0 / 1 以外も値なし・汎用 `Bad` とし、丸めない。Stale でも値が無効なら Bad を優先する。bit の `-0.0` は `0.0` と同じ false として扱う。core の `map_current_value` がこの契約を実装する。ハブの共通読み取りも [banto-industrial #615](https://github.com/tyaro/banto-industrial/issues/615) で同じ契約（値なし・Bad）に揃えた。
+4. **時刻。** Good の SourceTimestamp は採取時刻、Bad と Stale は品質を認識した時刻（または実際に復旧を試みた時刻）、不明なときは null。別の時刻や Read 時の現在時刻では補わない。core の `SampleTimestamps::for_quality` に写像を実装した。引数の品質はハブの入力品質であり、Good の無効値が Bad に写った場合は採取時刻を異常の観測時刻とみなす。固定タグの既存経路では、反復 Read でも保存済み SourceTimestamp が変わらないことを確認した。ハブの共通読み取りは [banto-industrial #614](https://github.com/tyaro/banto-industrial/issues/614) で採取時刻と品質の認識時刻を返し、[#627](https://github.com/tyaro/banto-industrial/pull/627) で実データに接続した（実装済み）。
 5. **ポート。** 既定は 4840。設定で変更できる。
 6. **LAN 公開。** 条件付きで許可する。`advertised_host` を用意し、未指定アドレス（`0.0.0.0` / `::`）でそれが未設定なら起動はエラーになる。ループバック以外は明示したときだけ公開し、そのときは警告ログを出す。既定の bind は `127.0.0.1`。
 7. **edition。** 2024 のまま。
@@ -146,6 +151,6 @@ banto の ADR-0011 に合わせ、配布は git タグを予定する。crates.i
 
 ハブとの結合に必要な残件を記録する。
 
-- **削除されたノードの購読。** タグを削除すると `BadNodeIdUnknown` を通知する。MonitoredItem を残し、同じ NodeId が戻ったら購読を再開する。リネームは旧ノードの削除と新ノードの追加で表す。実 Subscription テストで検証済み。ハブのタグレジストリとの結合は後続。
+- **削除されたノードの購読。** タグを削除すると `BadNodeIdUnknown` を通知する。MonitoredItem を残し、同じ NodeId が戻ったら購読を再開する。リネームは旧ノードの削除と新ノードの追加で表す。実 Subscription テストで検証済み。ハブのタグレジストリとは banto-industrial #627 で結合した。
 - **非有限値と bit。** core の値・品質変換をハブの現在値へ接続する。Hub の共通読み取りは [banto-industrial #615](https://github.com/tyaro/banto-industrial/issues/615) で値なし・Bad に統一された。
-- **品質だけの変化。** [async-opcua PR #274](https://github.com/FreeOpcUa/async-opcua/pull/274) の修正済みコミットを固定し、フィルタ未指定でも Good → Stale → Good の通知を実 Subscription テストで確認した。Good → Bad では core の契約どおり値を Null にして通知し、復帰も確認した。公開版への依存復帰と Null Variant 回避策の見直しは [#17](https://github.com/tyaro/banto-opcua/issues/17) で追跡する。ハブの実タグとの結合は後続。
+- **品質だけの変化。** [async-opcua PR #274](https://github.com/FreeOpcUa/async-opcua/pull/274) の修正済みコミットを固定し、フィルタ未指定でも Good → Stale → Good の通知を実 Subscription テストで確認した。Good → Bad では core の契約どおり値を Null にして通知し、復帰も確認した。公開版への依存復帰と Null Variant 回避策の見直しは [#17](https://github.com/tyaro/banto-opcua/issues/17) で追跡する。ハブの実タグとは banto-industrial #627 で結合した。
