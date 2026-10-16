@@ -90,3 +90,35 @@ async fn pki_dir_regenerates_a_keypair_when_one_half_is_missing() {
     assert_ne!(cert_after_lost_cert, cert_after_lost_key);
     assert_private_key_is_owner_only(&pki);
 }
+
+/// 書き込めないなどで組を作れなかったら、鍵なしで動かさず起動を失敗にする。
+/// root は権限を無視して書けるので、その環境では条件を作れず確かめない。
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pki_dir_fails_when_the_keypair_cannot_be_created() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use banto_opcua_server::Error;
+
+    let root = tempfile::tempdir().expect("試験用ディレクトリ");
+    let pki = root.path().join("pki");
+    let own = pki.join(CERT).parent().expect("own").to_path_buf();
+    fs::create_dir_all(&own).expect("own を作る");
+    fs::set_permissions(&own, fs::Permissions::from_mode(0o500)).expect("own を書けなくする");
+    if fs::write(own.join("probe"), b"").is_ok() {
+        fs::set_permissions(&own, fs::Permissions::from_mode(0o755)).expect("権限を戻す");
+        eprintln!("root では書き込みエラーを作れないため確かめない");
+        return;
+    }
+
+    let result = OpcUaServer::start(ServerConfig::default().with_port(0).with_pki_dir(&pki)).await;
+    fs::set_permissions(&own, fs::Permissions::from_mode(0o755)).expect("権限を戻す");
+    match result {
+        Err(Error::Pki(error)) => assert_eq!(error.kind(), std::io::ErrorKind::NotFound),
+        Err(other) => panic!("証明書と秘密鍵を作れなかったことを返す: {other}"),
+        Ok(server) => {
+            server.shutdown().await.expect("停止する");
+            panic!("組を作れないまま起動してはいけない");
+        }
+    }
+}

@@ -37,8 +37,8 @@ impl OpcUaServer {
     /// bind せずに [`Error::AdvertisedHostRequired`] を返す。ループバック以外へ
     /// 公開するときは警告ログを出す。
     ///
-    /// `pki_dir` を作れないとき、または Unix で残す秘密鍵の権限を絞れないときは
-    /// [`Error::Pki`] を返す。
+    /// `pki_dir` を作れないとき、証明書と秘密鍵の組を作れなかったとき、または
+    /// Unix で残す秘密鍵の権限を絞れないときは [`Error::Pki`] を返す。
     pub async fn start(mut config: ServerConfig) -> Result<RunningServer, Error> {
         if config.namespace_uri.trim().is_empty()
             || config.namespace_uri != config.namespace_uri.trim()
@@ -101,7 +101,7 @@ impl OpcUaServer {
         // 必要なクライアントには、実際に 0 ms の監視項目を作れるようにする。
         builder.limits_mut().subscriptions.min_sampling_interval_ms = 0.0;
         let (server, handle) = builder.build().map_err(Error::Build)?;
-        pki.restrict_private_key()?;
+        pki.finish()?;
         let fixed_tags = FixedTags::register(&handle, &namespace_uri, config.sample_tags)?;
 
         // 一時ディレクトリはタスクが所有する。Drop が先に消すと、停止前の
@@ -173,34 +173,42 @@ impl Pki {
         }
     }
 
-    /// 残す秘密鍵自体も所有者だけが読めるようにする。async-opcua は umask の
-    /// 権限で書くが、親ディレクトリは [`protect_private_dir`] が生成前に 0700 に
-    /// しているので、ここまでの間も他のユーザーは辿れない。一時ディレクトリは
+    /// `pki_dir` に証明書と秘密鍵の組がそろったことを確かめ、秘密鍵を絞る。
+    ///
+    /// async-opcua は生成に失敗しても（書き込めない、容量不足など）鍵なしで起動を
+    /// 続ける。`pki_dir` を指定したのに組が無いまま動くと、次の起動でも重い生成を
+    /// 繰り返すので、ここで [`Error::Pki`] にする。片方だけ残ったファイルは次の
+    /// 起動の [`discard_unpaired_keypair`] が片付ける。一時ディレクトリは
     /// tempfile が所有者だけに作り、停止で消えるので触らない。
-    #[cfg(unix)]
-    fn restrict_private_key(&self) -> Result<(), Error> {
-        use std::os::unix::fs::PermissionsExt;
-
+    fn finish(&self) -> Result<(), Error> {
         let Self::Persistent(dir) = self else {
             return Ok(());
         };
-        let key = dir.join(PRIVATE_KEY_PATH);
-        // async-opcua は生成に失敗しても鍵なしで起動を続ける（SecurityPolicy None では
-        // 使わない）。絞る鍵が無いときは、その起動を止めない。
-        if !key.try_exists().map_err(Error::Pki)? {
-            tracing::warn!(
-                path = %key.display(),
-                "pki_dir に秘密鍵を作れなかったため、証明書なしで起動します"
-            );
-            return Ok(());
+        for path in [dir.join(CERTIFICATE_PATH), dir.join(PRIVATE_KEY_PATH)] {
+            if !path.try_exists().map_err(Error::Pki)? {
+                return Err(Error::Pki(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("証明書と秘密鍵を作れませんでした: {}", path.display()),
+                )));
+            }
         }
-        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).map_err(Error::Pki)
+        restrict_private_key(&dir.join(PRIVATE_KEY_PATH))
     }
+}
 
-    #[cfg(not(unix))]
-    fn restrict_private_key(&self) -> Result<(), Error> {
-        Ok(())
-    }
+/// 秘密鍵自体も所有者だけが読めるようにする。async-opcua は umask の権限で書くが、
+/// 親ディレクトリは [`protect_private_dir`] が生成前に 0700 にしているので、
+/// ここまでの間も他のユーザーは辿れない。
+#[cfg(unix)]
+fn restrict_private_key(key: &Path) -> Result<(), Error> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(key, std::fs::Permissions::from_mode(0o600)).map_err(Error::Pki)
+}
+
+#[cfg(not(unix))]
+fn restrict_private_key(_key: &Path) -> Result<(), Error> {
+    Ok(())
 }
 
 /// 秘密鍵のディレクトリを、鍵を生成・読み込みする前に所有者だけのものにする。
@@ -454,8 +462,9 @@ mod tests {
         let result = Pki::prepare(Some(pki.clone()));
         std::fs::set_permissions(own, std::fs::Permissions::from_mode(0o755)).expect("権限を戻す");
         assert!(
-            matches!(result, Err(Error::Pki(_))),
-            "確かめられないときは起動しない"
+            matches!(&result, Err(Error::Pki(error)) if error.kind() == std::io::ErrorKind::PermissionDenied),
+            "確かめられないときは権限エラーで起動しない: {:?}",
+            result.as_ref().err()
         );
         assert_eq!(std::fs::read(&key).expect("秘密鍵が残る"), b"keep");
         assert_eq!(std::fs::read(&cert).expect("証明書が残る"), b"keep");
