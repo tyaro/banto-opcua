@@ -38,3 +38,7 @@ Phase 1 のサンプルタグは既定で残し、ハブは `with_sample_tags(fa
 ハブは更新・品質変化を定期的にサーバーへ反映し、削除・リネーム・型変更は
 削除と再登録で表す。SourceTimestamp が不明なときは現在時刻で補わない。
 公開範囲を選ぶハブ側の設定では、サンプルタグを無効にする必要がある。
+Read と sampling interval が 0 の購読は、渡された SourceTimestamp を保持する。
+非ゼロの sampling interval で遅延した通知は、基盤の async-opcua が
+SourceTimestamp を次のサンプル時刻へ置き換える。厳密な採取時刻が必要な購読では
+sampling interval を 0 に設定する。

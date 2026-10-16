@@ -36,6 +36,11 @@ Phase 1 の固定タグを既定で公開する。`Objects/Banto/PLC1/Line1` の
 `RunningServer::add_tag_reading` / `update_tag_reading` は型・値・品質・時刻を
 `TagReading` で受け取り、読み取り専用の Read / Subscription へ反映する。
 未取得でも DataType を保持し、SourceTimestamp が不明なら null のままにする。
+ドットを含む名前も Browse でき、Variable NodeId は外部名のまま保持する。
+Read と sampling interval が 0 の購読では、入力した SourceTimestamp を保持する。
+非ゼロの sampling interval で通知が遅れる場合、現在の async-opcua は
+SourceTimestamp を次のサンプル時刻に置き換える。厳密な採取時刻が必要な購読は
+sampling interval を 0 に設定する。
 この境界の理由は [ADR-0002](docs/adr/0002-dynamic-reading-boundary.md) に記す。
 ハブのタグレジストリ、設定 UI はまだ接続していない。
 
@@ -142,5 +147,5 @@ banto の ADR-0011 に合わせ、配布は git タグを予定する。crates.i
 ハブとの結合に必要な残件を記録する。
 
 - **削除されたノードの購読。** タグを削除すると `BadNodeIdUnknown` を通知する。MonitoredItem を残し、同じ NodeId が戻ったら購読を再開する。リネームは旧ノードの削除と新ノードの追加で表す。実 Subscription テストで検証済み。ハブのタグレジストリとの結合は後続。
-- **非有限値と bit。** core の値・品質変換をハブの現在値へ接続する。現状のハブは NaN を null かつ Good で出す。共通の読み取り契約は [banto-industrial #615](https://github.com/tyaro/banto-industrial/issues/615) で未決定。
+- **非有限値と bit。** core の値・品質変換をハブの現在値へ接続する。Hub の共通読み取りは [banto-industrial #615](https://github.com/tyaro/banto-industrial/issues/615) で値なし・Bad に統一された。
 - **品質だけの変化。** [async-opcua PR #274](https://github.com/FreeOpcUa/async-opcua/pull/274) の修正済みコミットを固定し、フィルタ未指定でも Good → Stale → Good の通知を実 Subscription テストで確認した。Good → Bad では core の契約どおり値を Null にして通知し、復帰も確認した。公開版への依存復帰と Null Variant 回避策の見直しは [#17](https://github.com/tyaro/banto-opcua/issues/17) で追跡する。ハブの実タグとの結合は後続。

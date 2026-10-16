@@ -12,8 +12,8 @@ use opcua::{
         node_manager::memory::{SimpleNodeManager, simple_node_manager},
     },
     types::{
-        AttributeId, DataTypeId, DataValue, DateTime, NodeId, ObjectId, QualifiedName,
-        ReferenceTypeId, StatusCode, TimestampsToReturn, VariableTypeId, Variant,
+        AttributeId, ByteString, DataTypeId, DataValue, DateTime, Identifier, NodeId, ObjectId,
+        QualifiedName, ReferenceTypeId, StatusCode, TimestampsToReturn, VariableTypeId, Variant,
     },
 };
 
@@ -195,8 +195,8 @@ impl FixedTags {
         after_insert: impl FnOnce(),
     ) -> Result<(), Error> {
         validate_path(connection, group, tag)?;
-        let connection_id = NodeId::new(self.namespace_index, connection);
-        let group_id = NodeId::new(self.namespace_index, format!("{connection}.{group}"));
+        let connection_id = folder_id(self.namespace_index, &[connection]);
+        let group_id = folder_id(self.namespace_index, &[connection, group]);
         let tag_id = NodeId::new(self.namespace_index, format!("{connection}.{group}.{tag}"));
         let mut space = self.manager.address_space().write();
         if space.node_exists(&tag_id) {
@@ -328,18 +328,34 @@ impl FixedTags {
 }
 
 fn validate_path(connection: &str, group: &str, tag: &str) -> Result<(), Error> {
-    if connection == ROOT_NAME {
+    if [connection, group, tag].into_iter().any(str::is_empty) {
         return Err(Error::TagUpdate(
-            "Banto はルートフォルダーの予約名です".to_owned(),
-        ));
-    }
-    if [connection, group, tag]
-        .into_iter()
-        .any(|part| part.is_empty() || part.contains('.'))
-    {
-        return Err(Error::TagUpdate(
-            "タグの各名前は空にせず、'.' を含めないでください".to_owned(),
+            "タグの各名前は空にしないでください".to_owned(),
         ));
     }
     Ok(())
+}
+
+/// ドットを含む名前は従来のフォルダー NodeId と衝突し得る。文字列のタグ
+/// NodeId とは異なる opaque ID にして、外部名 `{connection}.{group}.{tag}`
+/// の契約を変えずに Browse 階層を保持する。単純名は既存 ID を維持する。
+fn folder_id(namespace: u16, parts: &[&str]) -> NodeId {
+    if parts.iter().all(|part| !part.contains('.')) && !(parts.len() == 1 && parts[0] == ROOT_NAME)
+    {
+        return NodeId::new(namespace, parts.join("."));
+    }
+    let mut bytes = vec![u8::try_from(parts.len()).expect("フォルダーの深さは 1 または 2")];
+    for part in parts {
+        let part = part.as_bytes();
+        bytes.extend_from_slice(
+            &u32::try_from(part.len())
+                .expect("名前の長さは u32 以内")
+                .to_be_bytes(),
+        );
+        bytes.extend_from_slice(part);
+    }
+    NodeId {
+        namespace,
+        identifier: Identifier::ByteString(ByteString { value: Some(bytes) }),
+    }
 }

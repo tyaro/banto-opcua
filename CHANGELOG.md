@@ -22,6 +22,7 @@
 - `RunningServer::add_tag` / `remove_tag`。削除時に `BadNodeIdUnknown` を通知し、同じ NodeId の再登録で既存の購読を再開する。
 - 動的タグの型・値・品質・時刻を受け取る `TagReading` と `add_tag_reading` / `update_tag_reading`。未取得時も DataType を保持し、Read / Subscription に既知の時刻だけを公開する。
 - `ServerConfig::with_sample_tags(false)`。Phase 1 の固定サンプルを外して実タグの外部名との衝突を避ける。
+- ドットを含む接続・グループ・タグ名と、ルートと同名の接続 `Banto` を Browse と外部名 NodeId で扱えるようにした。
 
 ### 修正
 
@@ -31,6 +32,7 @@
 - サーバーの Drop が待受タスクを abort し、証明書の一時ディレクトリはタスクが終わるまで残るようにした。
 - `advertised_host` に URL、ポート、パスなどを含めた設定を起動前に拒否する。
 - `advertised_host` に末尾ドット付きの DNS 名を指定でき、URL にはドットなしで載せる。
+- 非ゼロのサンプリング間隔で遅れた購読通知は、基盤が SourceTimestamp を次のサンプル時刻へ置き換える制限を明記した。
 
 ### 変更
 
