@@ -41,7 +41,8 @@ Phase 1 のサンプルタグは既定で残し、ハブは `with_sample_tags(fa
 削除と再登録で表す。SourceTimestamp が不明なときは現在時刻で補わない。
 公開範囲を選ぶハブ側の設定では、サンプルタグを無効にする必要がある。
 サーバーの最小 sampling interval を 0 ms とし、0 を要求した購読は補正後も
-0 ms で作成する。Read と 0 ms の購読は、渡された SourceTimestamp を保持する。
-非ゼロの sampling interval で遅延した通知は、基盤の async-opcua が
-SourceTimestamp を次のサンプル時刻へ置き換える。厳密な採取時刻が必要な購読では
-sampling interval を 0 に設定する。
+0 ms で作成する。Read と 0 ms / 非ゼロの購読は、渡された SourceTimestamp を
+保持する。基盤の async-opcua は以前、非ゼロの sampling interval で遅延した
+通知の SourceTimestamp を次のサンプル時刻へ置き換えていた。この修正は
+[MPL-2.0 の fork](https://github.com/tyaro/async-opcua/pull/1) に分離し、
+`c43e77b5cffb732959e2c1c9b73d0ba07a46a4bb` に固定する。

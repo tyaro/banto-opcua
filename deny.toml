@@ -41,7 +41,7 @@ unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # #17: upstream #274 の修正を含むコミットを固定。公開版への移行時に削除する。
-allow-git = ["https://github.com/FreeOpcUa/async-opcua"]
+allow-git = ["https://github.com/tyaro/async-opcua"]
 required-git-spec = "rev"
 
 [advisories]

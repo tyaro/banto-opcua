@@ -37,11 +37,10 @@ Phase 1 の固定タグを既定で公開する。`Objects/Banto/PLC1/Line1` の
 `TagReading` で受け取り、読み取り専用の Read / Subscription へ反映する。
 未取得でも DataType を保持し、SourceTimestamp が不明なら null のままにする。
 ドットを含む名前も Browse でき、Variable NodeId は外部名のまま保持する。
-Read と sampling interval が 0 の購読では、入力した SourceTimestamp を保持する。
-サーバーの最小値も 0 ms に設定し、購読作成応答で 0 ms を確認する。
-非ゼロの sampling interval で通知が遅れる場合、現在の async-opcua は
-SourceTimestamp を次のサンプル時刻に置き換える。厳密な採取時刻が必要な購読は
-sampling interval を 0 に設定する。
+Read と 0 ms / 非ゼロの sampling interval の購読で、入力した SourceTimestamp を
+保持する。サーバーの最小値を 0 ms に設定し、購読作成応答でも要求した間隔を確認する。
+遅延したサンプルの時刻を保持する async-opcua の修正は、MPL-2.0 の
+[別リポジトリ](https://github.com/tyaro/async-opcua/pull/1)で公開している。
 この境界の理由は [ADR-0002](docs/adr/0002-dynamic-reading-boundary.md) に記す。
 ハブのタグレジストリ、設定 UI はまだ接続していない。
 

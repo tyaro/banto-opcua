@@ -35,7 +35,7 @@
 
 ### 変更
 
-- 最小 sampling interval を 0 ms とし、0 ms を要求した購読が実際に 0 ms で作成されるようにした。非ゼロで遅れた通知は SourceTimestamp が書き換わる制限を明記した。
+- 最小 sampling interval を 0 ms とし、0 ms を要求した購読が実際に 0 ms で作成されるようにした。非ゼロで遅れた通知も採取時刻を保持する async-opcua の MPL-2.0 fork を固定した。
 - ドット入りの名前で NodeId が一致しても、登録時と異なるグループからの更新・削除を拒否する。
 - `ServerConfig` は外部クレートで構造体リテラルを使えなくなった。`ServerConfig::default().with_port(...)` などへ移行する。
 - 自由関数 `endpoint_url` を公開 API から外した。`ServerConfig::endpoint_url` を使う。

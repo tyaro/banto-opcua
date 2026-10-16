@@ -197,6 +197,42 @@ async fn dynamic_readings_keep_type_quality_and_timestamps_through_subscription(
         repeated.source_timestamp
     );
 
+    let (sampled_sender, mut sampled_receiver) = mpsc::unbounded_channel();
+    let sampled_subscription = session
+        .create_subscription(
+            Duration::from_millis(100),
+            30,
+            10,
+            0,
+            0,
+            true,
+            DataChangeCallback::new(move |value, _item| {
+                let _ = sampled_sender.send(value);
+            }),
+        )
+        .await
+        .expect("100 ms の購読を作る");
+    let mut sampled_request: MonitoredItemCreateRequest = speed.clone().into();
+    sampled_request.requested_parameters.sampling_interval = 100.0;
+    let sampled_items = session
+        .create_monitored_items(
+            sampled_subscription,
+            TimestampsToReturn::Both,
+            vec![sampled_request],
+        )
+        .await
+        .expect("100 ms の監視項目を作る");
+    assert_eq!(sampled_items.len(), 1);
+    assert_eq!(sampled_items[0].result.revised_sampling_interval, 100.0);
+    assert_change(
+        &mut sampled_receiver,
+        Some(Variant::Double(12.5)),
+        StatusCode::Good,
+        Some(100),
+        110,
+    )
+    .await;
+
     server
         .update_tag_reading(
             "PLC1",
@@ -214,6 +250,14 @@ async fn dynamic_readings_keep_type_quality_and_timestamps_through_subscription(
         .expect("50 ms 後の採取値を反映する");
     assert_change(
         &mut receiver,
+        Some(Variant::Double(12.75)),
+        StatusCode::Good,
+        Some(150),
+        160,
+    )
+    .await;
+    assert_change(
+        &mut sampled_receiver,
         Some(Variant::Double(12.75)),
         StatusCode::Good,
         Some(150),
