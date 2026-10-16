@@ -13,7 +13,7 @@ use opcua::{
     },
     types::{
         AttributeId, DataValue, DateTime, NodeId, ObjectId, QualifiedName, ReferenceTypeId,
-        StatusCode, VariableTypeId, Variant,
+        StatusCode, TimestampsToReturn, VariableTypeId, Variant,
     },
 };
 
@@ -174,9 +174,18 @@ impl FixedTags {
         );
         after_insert();
         // 初期値の保存と通知まで write ロックで排他し、削除・再登録との逆転を防ぐ。
-        handle
-            .subscriptions()
-            .notify_data_change([(initial, &tag_id, AttributeId::Value)].into_iter());
+        // 通常の値更新と同じ sampler で監視項目ごとにノードを読み直す。
+        handle.subscriptions().maybe_notify(
+            [(&tag_id, AttributeId::Value)].into_iter(),
+            |id, attribute, range, encoding| {
+                space.find(id)?.as_node().get_attribute(
+                    TimestampsToReturn::Both,
+                    attribute,
+                    range,
+                    encoding,
+                )
+            },
+        );
         Ok(())
     }
 
@@ -198,7 +207,7 @@ impl FixedTags {
         handle.subscriptions().notify_data_change(
             [(
                 DataValue {
-                    value: Some(Variant::Empty),
+                    value: None,
                     status: Some(StatusCode::BadNodeIdUnknown),
                     source_timestamp: Some(now),
                     server_timestamp: Some(now),

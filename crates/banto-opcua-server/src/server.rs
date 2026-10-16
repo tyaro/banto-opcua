@@ -386,6 +386,15 @@ mod tests {
             inserted_rx
                 .recv_timeout(Duration::from_secs(5))
                 .expect("初回の挿入を待つ");
+            assert!(
+                server
+                    .fixed_tags
+                    .manager
+                    .address_space()
+                    .try_write()
+                    .is_none(),
+                "初回の追加が write ロックを保持している"
+            );
             let second_server = &server;
             let second = scope.spawn(move || {
                 removing_tx.send(()).expect("削除開始を知らせる");
