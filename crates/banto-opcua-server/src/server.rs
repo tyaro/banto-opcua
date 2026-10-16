@@ -426,6 +426,41 @@ mod tests {
 
     use super::*;
 
+    /// 存在を確かめられないときは「無い」と扱わず、残っている鍵を消さない。
+    /// root は権限を無視して読めるので、その環境では条件を作れず確かめない。
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_certificate_dir_keeps_the_keypair() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().expect("試験用ディレクトリ");
+        let pki = root.path().join("pki");
+        let cert = pki.join(CERTIFICATE_PATH);
+        let key = pki.join(PRIVATE_KEY_PATH);
+        for path in [&cert, &key] {
+            std::fs::create_dir_all(path.parent().expect("親")).expect("親を作る");
+            std::fs::write(path, b"keep").expect("ファイルを置く");
+        }
+        let own = cert.parent().expect("own");
+        std::fs::set_permissions(own, std::fs::Permissions::from_mode(0o000))
+            .expect("own を開けなくする");
+        if cert.try_exists().is_ok() {
+            std::fs::set_permissions(own, std::fs::Permissions::from_mode(0o755))
+                .expect("権限を戻す");
+            eprintln!("root では権限エラーを作れないため確かめない");
+            return;
+        }
+
+        let result = Pki::prepare(Some(pki.clone()));
+        std::fs::set_permissions(own, std::fs::Permissions::from_mode(0o755)).expect("権限を戻す");
+        assert!(
+            matches!(result, Err(Error::Pki(_))),
+            "確かめられないときは起動しない"
+        );
+        assert_eq!(std::fs::read(&key).expect("秘密鍵が残る"), b"keep");
+        assert_eq!(std::fs::read(&cert).expect("証明書が残る"), b"keep");
+    }
+
     /// 鍵の生成前（`ServerBuilder::build` の前）に、秘密鍵のディレクトリが
     /// 所有者だけのものになっている。既存の緩いディレクトリも絞る。
     #[cfg(unix)]
