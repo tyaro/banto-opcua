@@ -2,7 +2,10 @@
 //!
 //! Phase 1 の固定タグと、追加・削除できるタグを Objects 以下に公開する。
 
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
 use opcua::{
     server::{ANONYMOUS_USER_TOKEN_ID, ServerBuilder, ServerEndpoint, ServerHandle},
@@ -33,7 +36,10 @@ impl OpcUaServer {
     /// 未指定アドレス（`0.0.0.0` / `::`）で、`advertised_host` が無いときは
     /// bind せずに [`Error::AdvertisedHostRequired`] を返す。ループバック以外へ
     /// 公開するときは警告ログを出す。
-    pub async fn start(config: ServerConfig) -> Result<RunningServer, Error> {
+    ///
+    /// `pki_dir` を作れないとき、証明書と秘密鍵の組を作れなかったとき、または
+    /// Unix で残す秘密鍵の権限を絞れないときは [`Error::Pki`] を返す。
+    pub async fn start(mut config: ServerConfig) -> Result<RunningServer, Error> {
         if config.namespace_uri.trim().is_empty()
             || config.namespace_uri != config.namespace_uri.trim()
             || config.namespace_uri == "http://opcfoundation.org/UA/"
@@ -57,7 +63,7 @@ impl OpcUaServer {
             return Err(Error::InvalidAdvertisedHost(host.to_owned()));
         }
 
-        let pki = tempfile::tempdir().map_err(Error::Pki)?;
+        let pki = Pki::prepare(config.pki_dir.take())?;
         let listener = TcpListener::bind((config.bind, config.port))
             .await
             .map_err(Error::Bind)?;
@@ -79,8 +85,8 @@ impl OpcUaServer {
             .application_uri(config.application_uri)
             .product_uri(config.product_uri)
             .create_sample_keypair(true)
-            .certificate_path("own/cert.der")
-            .private_key_path("private/private.pem")
+            .certificate_path(CERTIFICATE_PATH)
+            .private_key_path(PRIVATE_KEY_PATH)
             .pki_dir(pki.path())
             .host(endpoint_host)
             .port(local_addr.port())
@@ -95,10 +101,11 @@ impl OpcUaServer {
         // 必要なクライアントには、実際に 0 ms の監視項目を作れるようにする。
         builder.limits_mut().subscriptions.min_sampling_interval_ms = 0.0;
         let (server, handle) = builder.build().map_err(Error::Build)?;
+        pki.finish()?;
         let fixed_tags = FixedTags::register(&handle, &namespace_uri, config.sample_tags)?;
 
         // 一時ディレクトリはタスクが所有する。Drop が先に消すと、停止前の
-        // サーバーが証明書を読めなくなる。
+        // サーバーが証明書を読めなくなる。`pki_dir` は呼び出し側が所有し、消さない。
         let task = tokio::spawn(async move {
             let _pki = pki;
             server.run_with(listener).await
@@ -112,6 +119,118 @@ impl OpcUaServer {
             task: Some(task),
         })
     }
+}
+
+const CERTIFICATE_PATH: &str = "own/cert.der";
+const PRIVATE_KEY_PATH: &str = "private/private.pem";
+
+/// 証明書と秘密鍵の片方だけが残っていたら消し、async-opcua に組で作り直させる。
+///
+/// async-opcua は既存のファイルを上書きしないので、片方だけ残ると、新しい証明書と
+/// 古い鍵の組み違いが残るか、鍵の無いまま起動する。初回生成の途中でプロセスが
+/// 落ちたときに起こり得る。両方あれば中身は検証しない（壊れていたら両方消す）。
+fn discard_unpaired_keypair(dir: &Path) -> Result<(), Error> {
+    let cert = dir.join(CERTIFICATE_PATH);
+    let key = dir.join(PRIVATE_KEY_PATH);
+    // 権限エラーなどを「無い」と取り違えて、残っている片方を消さない。
+    let exists = |path: &Path| path.try_exists().map_err(Error::Pki);
+    let lone = match (exists(&cert)?, exists(&key)?) {
+        (true, false) => cert,
+        (false, true) => key,
+        _ => return Ok(()),
+    };
+    tracing::warn!(
+        path = %lone.display(),
+        "証明書と秘密鍵の片方だけが残っているため消して作り直します"
+    );
+    std::fs::remove_file(&lone).map_err(Error::Pki)
+}
+
+/// 自己署名証明書の置き場。一時ディレクトリは停止とともに消え、
+/// `pki_dir` は次の起動で同じ鍵を読み直すために残す。
+enum Pki {
+    Temporary(tempfile::TempDir),
+    Persistent(PathBuf),
+}
+
+impl Pki {
+    fn prepare(dir: Option<PathBuf>) -> Result<Self, Error> {
+        match dir {
+            Some(dir) => {
+                std::fs::create_dir_all(&dir).map_err(Error::Pki)?;
+                protect_private_dir(&dir.join(PRIVATE_KEY_PATH))?;
+                discard_unpaired_keypair(&dir)?;
+                Ok(Self::Persistent(dir))
+            }
+            None => tempfile::tempdir().map(Self::Temporary).map_err(Error::Pki),
+        }
+    }
+
+    fn path(&self) -> &Path {
+        match self {
+            Self::Temporary(dir) => dir.path(),
+            Self::Persistent(dir) => dir,
+        }
+    }
+
+    /// `pki_dir` に証明書と秘密鍵の組がそろったことを確かめ、秘密鍵を絞る。
+    ///
+    /// async-opcua は生成に失敗しても（書き込めない、容量不足など）鍵なしで起動を
+    /// 続ける。`pki_dir` を指定したのに組が無いまま動くと、次の起動でも重い生成を
+    /// 繰り返すので、ここで [`Error::Pki`] にする。片方だけ残ったファイルは次の
+    /// 起動の [`discard_unpaired_keypair`] が片付ける。一時ディレクトリは
+    /// tempfile が所有者だけに作り、停止で消えるので触らない。
+    fn finish(&self) -> Result<(), Error> {
+        let Self::Persistent(dir) = self else {
+            return Ok(());
+        };
+        for path in [dir.join(CERTIFICATE_PATH), dir.join(PRIVATE_KEY_PATH)] {
+            if !path.try_exists().map_err(Error::Pki)? {
+                return Err(Error::Pki(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("証明書と秘密鍵を作れませんでした: {}", path.display()),
+                )));
+            }
+        }
+        restrict_private_key(&dir.join(PRIVATE_KEY_PATH))
+    }
+}
+
+/// 秘密鍵自体も所有者だけが読めるようにする。async-opcua は umask の権限で書くが、
+/// 親ディレクトリは [`protect_private_dir`] が生成前に 0700 にしているので、
+/// ここまでの間も他のユーザーは辿れない。
+#[cfg(unix)]
+fn restrict_private_key(key: &Path) -> Result<(), Error> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(key, std::fs::Permissions::from_mode(0o600)).map_err(Error::Pki)
+}
+
+#[cfg(not(unix))]
+fn restrict_private_key(_key: &Path) -> Result<(), Error> {
+    Ok(())
+}
+
+/// 秘密鍵のディレクトリを、鍵を生成・読み込みする前に所有者だけのものにする。
+/// 無ければ 0700 で作り、既にあれば権限を 0700 に絞る。
+#[cfg(unix)]
+fn protect_private_dir(key: &Path) -> Result<(), Error> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    let Some(dir) = key.parent() else {
+        return Ok(());
+    };
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .map_err(Error::Pki)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(Error::Pki)
+}
+
+#[cfg(not(unix))]
+fn protect_private_dir(_key: &Path) -> Result<(), Error> {
+    Ok(())
 }
 
 /// 起動済みのサーバー。
@@ -314,6 +433,80 @@ mod tests {
     };
 
     use super::*;
+
+    /// 存在を確かめられないときは「無い」と扱わず、残っている鍵を消さない。
+    /// root は権限を無視して読めるので、その環境では条件を作れず確かめない。
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_certificate_dir_keeps_the_keypair() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().expect("試験用ディレクトリ");
+        let pki = root.path().join("pki");
+        let cert = pki.join(CERTIFICATE_PATH);
+        let key = pki.join(PRIVATE_KEY_PATH);
+        for path in [&cert, &key] {
+            std::fs::create_dir_all(path.parent().expect("親")).expect("親を作る");
+            std::fs::write(path, b"keep").expect("ファイルを置く");
+        }
+        let own = cert.parent().expect("own");
+        std::fs::set_permissions(own, std::fs::Permissions::from_mode(0o000))
+            .expect("own を開けなくする");
+        if cert.try_exists().is_ok() {
+            std::fs::set_permissions(own, std::fs::Permissions::from_mode(0o755))
+                .expect("権限を戻す");
+            eprintln!("root では権限エラーを作れないため確かめない");
+            return;
+        }
+
+        let result = Pki::prepare(Some(pki.clone()));
+        std::fs::set_permissions(own, std::fs::Permissions::from_mode(0o755)).expect("権限を戻す");
+        assert!(
+            matches!(&result, Err(Error::Pki(error)) if error.kind() == std::io::ErrorKind::PermissionDenied),
+            "確かめられないときは権限エラーで起動しない: {:?}",
+            result.as_ref().err()
+        );
+        assert_eq!(std::fs::read(&key).expect("秘密鍵が残る"), b"keep");
+        assert_eq!(std::fs::read(&cert).expect("証明書が残る"), b"keep");
+    }
+
+    /// 鍵の生成前（`ServerBuilder::build` の前）に、秘密鍵のディレクトリが
+    /// 所有者だけのものになっている。既存の緩いディレクトリも絞る。
+    #[cfg(unix)]
+    #[test]
+    fn persistent_pki_protects_the_private_dir_before_key_generation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = |path: &Path| {
+            std::fs::metadata(path)
+                .expect("権限を読む")
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        let root = tempfile::tempdir().expect("試験用ディレクトリ");
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o755))
+            .expect("親を他のユーザーが辿れる状態にする");
+
+        let fresh = root.path().join("fresh");
+        let pki = Pki::prepare(Some(fresh.clone())).expect("新しい保存先を用意する");
+        assert_eq!(mode(&fresh.join("private")), 0o700);
+        assert!(
+            !fresh.join(PRIVATE_KEY_PATH).exists(),
+            "鍵はまだ無い（生成前に保護済み）"
+        );
+        drop(pki);
+
+        let loose = root.path().join("loose");
+        std::fs::create_dir_all(loose.join("private")).expect("既存の private");
+        std::fs::set_permissions(
+            loose.join("private"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("緩い権限にする");
+        Pki::prepare(Some(loose.clone())).expect("既存の保存先を用意する");
+        assert_eq!(mode(&loose.join("private")), 0o700);
+    }
 
     #[tokio::test]
     async fn unspecified_bind_without_advertised_host_is_rejected() {

@@ -23,6 +23,8 @@
 - 動的タグの型・値・品質・時刻を受け取る `TagReading` と `add_tag_reading` / `update_tag_reading`。未取得時も DataType を保持し、Read / Subscription に既知の時刻だけを公開する。
 - `ServerConfig::with_sample_tags(false)`。Phase 1 の固定サンプルを外して実タグの外部名との衝突を避ける。
 - ドットを含む接続・グループ・タグ名と、ルートと同名の接続 `Banto` を Browse と外部名 NodeId で扱えるようにした。
+- `ServerConfig::with_pki_dir`。自己署名の鍵と証明書を初回だけ作って再利用し、2 回目以降の起動を速くする（ADR-0003）。
+- 非有限値が購読でも値なし・Bad と採取時刻で届くことを確かめるテスト。
 
 ### 修正
 

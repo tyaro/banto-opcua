@@ -52,6 +52,9 @@ impl TagReading {
 }
 
 fn date_time(ticks: i64) -> Option<DateTime> {
-    // core の i64 範囲と OPC UA の最大年 (9999) は異なる。
+    // 刻み 0（1601-01-01）は async-opcua の `DateTime::null()` と同じ「時刻なし」。
+    // 値を持つ時刻として渡さず、0 以下は None にする。
+    // core の刻みは Unix 時刻以降だけなので、実データの採取時刻はここで落ちない。
+    // 上限は core の i64 範囲ではなく OPC UA の最大年（9999）。
     (ticks > 0 && ticks < DateTime::endtimes_ticks()).then(|| DateTime::from(ticks))
 }

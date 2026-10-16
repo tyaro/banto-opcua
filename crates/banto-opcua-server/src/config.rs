@@ -1,6 +1,11 @@
-//! サーバーの待受設定。証明書とセキュリティポリシーの項目は Phase 3 まで置かない。
+//! サーバーの待受設定。SecurityPolicy と認証の項目は Phase 3 まで置かない。
+//! 例外として、自己署名の鍵と証明書の保存先だけを [`ServerConfig::pki_dir`] に
+//! 置く（[ADR-0003](https://github.com/tyaro/banto-opcua/blob/main/docs/adr/0003-persistent-pki-dir.md)）。
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::PathBuf,
+};
 
 /// OPC UA サーバーの待受設定。
 ///
@@ -35,6 +40,21 @@ pub struct ServerConfig {
     /// （`0.0.0.0` / `::`）で待受するときは必須。IPv6 は括弧なしでもよい。
     /// DNS 名の末尾のドットは URL に載せるときに除く。
     pub advertised_host: Option<String>,
+    /// サーバーの自己署名証明書と秘密鍵を置くディレクトリ。
+    ///
+    /// 未設定なら起動ごとに一時ディレクトリへ RSA 鍵を作り、停止で消す。
+    /// 設定すると、そこに鍵と証明書が無いときだけ作り、以降の起動では
+    /// 再利用する。ディレクトリが無ければ作る。片方だけ残っていたら消して
+    /// 組で作り直す。存在を確かめられない（権限エラーなど）ときは何も消さず、
+    /// 起動を止める。書き込めないなどで組を作れなかったときも起動を止める。
+    /// 壊れたファイルは検証しないので、そのときは両方を消す。
+    /// SecurityPolicy は `None` のままで、鍵は通信の暗号化に使わない。
+    ///
+    /// Unix では鍵の生成前に秘密鍵のディレクトリを所有者だけのものにし、
+    /// 生成後に秘密鍵も所有者だけが読めるようにする。Windows の ACL は
+    /// 呼び出し側のデータディレクトリに従う。同時に起動する複数のサーバーで
+    /// 同じディレクトリを共有しない（初回の生成が競合する）。
+    pub pki_dir: Option<PathBuf>,
 }
 
 impl Default for ServerConfig {
@@ -49,6 +69,7 @@ impl Default for ServerConfig {
             namespace_uri: "urn:banto:opcua:tags".to_owned(),
             sample_tags: true,
             advertised_host: None,
+            pki_dir: None,
         }
     }
 }
@@ -106,6 +127,12 @@ impl ServerConfig {
     /// 形式は [`crate::OpcUaServer::start`] で検証する。
     pub fn with_advertised_host(mut self, host: impl Into<String>) -> Self {
         self.advertised_host = Some(host.into());
+        self
+    }
+
+    /// 自己署名の鍵と証明書を再利用するディレクトリを設定する。
+    pub fn with_pki_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.pki_dir = Some(dir.into());
         self
     }
 
@@ -241,6 +268,7 @@ mod tests {
         assert_eq!(config.port, 4840);
         assert_eq!(config.endpoint_path, "/");
         assert_eq!(config.advertised_host, None);
+        assert_eq!(config.pki_dir, None);
     }
 
     #[test]

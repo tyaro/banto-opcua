@@ -29,3 +29,4 @@
 | --- | --- | --- |
 | [0001](0001-async-opcua-base.md) | OPC UA の基盤実装に async-opcua（MPL-2.0）を採用し、本クレート自体は MIT のままにする | Accepted |
 | [0002](0002-dynamic-reading-boundary.md) | 動的タグの現在値をプロトコル非依存の入力で渡す | Accepted |
+| [0003](0003-persistent-pki-dir.md) | 自己署名の鍵と証明書の保存先だけを Phase 3 より前に設定可能にする | Accepted |
