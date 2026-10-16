@@ -85,7 +85,7 @@ impl OpcUaServer {
             .application_uri(config.application_uri)
             .product_uri(config.product_uri)
             .create_sample_keypair(true)
-            .certificate_path("own/cert.der")
+            .certificate_path(CERTIFICATE_PATH)
             .private_key_path(PRIVATE_KEY_PATH)
             .pki_dir(pki.path())
             .host(endpoint_host)
@@ -121,7 +121,28 @@ impl OpcUaServer {
     }
 }
 
+const CERTIFICATE_PATH: &str = "own/cert.der";
 const PRIVATE_KEY_PATH: &str = "private/private.pem";
+
+/// 証明書と秘密鍵の片方だけが残っていたら消し、async-opcua に組で作り直させる。
+///
+/// async-opcua は既存のファイルを上書きしないので、片方だけ残ると、新しい証明書と
+/// 古い鍵の組み違いが残るか、鍵の無いまま起動する。初回生成の途中でプロセスが
+/// 落ちたときに起こり得る。両方あれば中身は検証しない（壊れていたら両方消す）。
+fn discard_unpaired_keypair(dir: &Path) -> Result<(), Error> {
+    let cert = dir.join(CERTIFICATE_PATH);
+    let key = dir.join(PRIVATE_KEY_PATH);
+    let lone = match (cert.exists(), key.exists()) {
+        (true, false) => cert,
+        (false, true) => key,
+        _ => return Ok(()),
+    };
+    tracing::warn!(
+        path = %lone.display(),
+        "証明書と秘密鍵の片方だけが残っているため消して作り直します"
+    );
+    std::fs::remove_file(&lone).map_err(Error::Pki)
+}
 
 /// 自己署名証明書の置き場。一時ディレクトリは停止とともに消え、
 /// `pki_dir` は次の起動で同じ鍵を読み直すために残す。
@@ -136,6 +157,7 @@ impl Pki {
             Some(dir) => {
                 std::fs::create_dir_all(&dir).map_err(Error::Pki)?;
                 protect_private_dir(&dir.join(PRIVATE_KEY_PATH))?;
+                discard_unpaired_keypair(&dir)?;
                 Ok(Self::Persistent(dir))
             }
             None => tempfile::tempdir().map(Self::Temporary).map_err(Error::Pki),
@@ -160,11 +182,13 @@ impl Pki {
         let Self::Persistent(dir) = self else {
             return Ok(());
         };
-        std::fs::set_permissions(
-            dir.join(PRIVATE_KEY_PATH),
-            std::fs::Permissions::from_mode(0o600),
-        )
-        .map_err(Error::Pki)
+        let key = dir.join(PRIVATE_KEY_PATH);
+        // async-opcua は生成に失敗しても鍵なしで起動を続ける（SecurityPolicy None では
+        // 使わない）。絞る鍵が無いときは、その起動を止めない。
+        if !key.exists() {
+            return Ok(());
+        }
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).map_err(Error::Pki)
     }
 
     #[cfg(not(unix))]

@@ -58,3 +58,26 @@ async fn pki_dir_reuses_the_generated_keypair_across_restarts() {
         );
     }
 }
+
+/// 初回生成の途中で落ちるなどして片方だけ残ったら、組で作り直して起動する。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pki_dir_regenerates_a_keypair_when_one_half_is_missing() {
+    let root = tempfile::tempdir().expect("試験用ディレクトリ");
+    let pki = root.path().join("pki");
+    let (cert, key) = start_and_read(&pki).await;
+
+    // 証明書だけ残っている。
+    fs::remove_file(pki.join(KEY)).expect("秘密鍵を消す");
+    let (cert_after_lost_key, key_after_lost_key) = start_and_read(&pki).await;
+    assert_ne!(cert_after_lost_key, cert, "残った証明書は使わず作り直す");
+    assert_ne!(key_after_lost_key, key);
+
+    // 秘密鍵だけ残っている。
+    fs::remove_file(pki.join(CERT)).expect("証明書を消す");
+    let (cert_after_lost_cert, key_after_lost_cert) = start_and_read(&pki).await;
+    assert_ne!(
+        key_after_lost_cert, key_after_lost_key,
+        "残った秘密鍵は使わず作り直す"
+    );
+    assert_ne!(cert_after_lost_cert, cert_after_lost_key);
+}
