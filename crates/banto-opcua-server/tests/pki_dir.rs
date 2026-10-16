@@ -31,6 +31,12 @@ async fn start_and_read(pki: &Path) -> (Vec<u8>, Vec<u8>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pki_dir_reuses_the_generated_keypair_across_restarts() {
     let root = tempfile::tempdir().expect("試験用ディレクトリ");
+    // 実運用に近く、親ディレクトリは他のユーザーも辿れる状態にする。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o755)).expect("親の権限");
+    }
     // 無いディレクトリも作る。
     let pki = root.path().join("opcua").join("pki");
 

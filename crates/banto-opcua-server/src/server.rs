@@ -135,6 +135,7 @@ impl Pki {
         match dir {
             Some(dir) => {
                 std::fs::create_dir_all(&dir).map_err(Error::Pki)?;
+                protect_private_dir(&dir.join(PRIVATE_KEY_PATH))?;
                 Ok(Self::Persistent(dir))
             }
             None => tempfile::tempdir().map(Self::Temporary).map_err(Error::Pki),
@@ -148,8 +149,9 @@ impl Pki {
         }
     }
 
-    /// 残す秘密鍵を所有者だけが読めるようにする。async-opcua は umask の
-    /// 権限で書くため、作成直後と既存の鍵の両方をここで絞る。一時ディレクトリは
+    /// 残す秘密鍵自体も所有者だけが読めるようにする。async-opcua は umask の
+    /// 権限で書くが、親ディレクトリは [`protect_private_dir`] が生成前に 0700 に
+    /// しているので、ここまでの間も他のユーザーは辿れない。一時ディレクトリは
     /// tempfile が所有者だけに作り、停止で消えるので触らない。
     #[cfg(unix)]
     fn restrict_private_key(&self) -> Result<(), Error> {
@@ -158,18 +160,39 @@ impl Pki {
         let Self::Persistent(dir) = self else {
             return Ok(());
         };
-        let key = dir.join(PRIVATE_KEY_PATH);
-        if let Some(dir) = key.parent() {
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
-                .map_err(Error::Pki)?;
-        }
-        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).map_err(Error::Pki)
+        std::fs::set_permissions(
+            dir.join(PRIVATE_KEY_PATH),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .map_err(Error::Pki)
     }
 
     #[cfg(not(unix))]
     fn restrict_private_key(&self) -> Result<(), Error> {
         Ok(())
     }
+}
+
+/// 秘密鍵のディレクトリを、鍵を生成・読み込みする前に所有者だけのものにする。
+/// 無ければ 0700 で作り、既にあれば権限を 0700 に絞る。
+#[cfg(unix)]
+fn protect_private_dir(key: &Path) -> Result<(), Error> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    let Some(dir) = key.parent() else {
+        return Ok(());
+    };
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .map_err(Error::Pki)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(Error::Pki)
+}
+
+#[cfg(not(unix))]
+fn protect_private_dir(_key: &Path) -> Result<(), Error> {
+    Ok(())
 }
 
 /// 起動済みのサーバー。
@@ -372,6 +395,44 @@ mod tests {
     };
 
     use super::*;
+
+    /// 鍵の生成前（`ServerBuilder::build` の前）に、秘密鍵のディレクトリが
+    /// 所有者だけのものになっている。既存の緩いディレクトリも絞る。
+    #[cfg(unix)]
+    #[test]
+    fn persistent_pki_protects_the_private_dir_before_key_generation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = |path: &Path| {
+            std::fs::metadata(path)
+                .expect("権限を読む")
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        let root = tempfile::tempdir().expect("試験用ディレクトリ");
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o755))
+            .expect("親を他のユーザーが辿れる状態にする");
+
+        let fresh = root.path().join("fresh");
+        let pki = Pki::prepare(Some(fresh.clone())).expect("新しい保存先を用意する");
+        assert_eq!(mode(&fresh.join("private")), 0o700);
+        assert!(
+            !fresh.join(PRIVATE_KEY_PATH).exists(),
+            "鍵はまだ無い（生成前に保護済み）"
+        );
+        drop(pki);
+
+        let loose = root.path().join("loose");
+        std::fs::create_dir_all(loose.join("private")).expect("既存の private");
+        std::fs::set_permissions(
+            loose.join("private"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("緩い権限にする");
+        Pki::prepare(Some(loose.clone())).expect("既存の保存先を用意する");
+        assert_eq!(mode(&loose.join("private")), 0o700);
+    }
 
     #[tokio::test]
     async fn unspecified_bind_without_advertised_host_is_rejected() {
