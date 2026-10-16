@@ -337,8 +337,8 @@ impl RunningServer {
     ///
     /// 空になった接続・グループのフォルダーは消さず、Browse に残る。削除と
     /// 再登録の間も、クライアントが控えたフォルダーの NodeId を無効にしないため。
-    /// 残るフォルダーの数は、このプロセスで使った接続名・グループ名の数までで、
-    /// アドレス空間はメモリ上にしかないので再起動すれば消える。
+    /// 残るフォルダーの数は、このプロセスで使った接続と（接続, グループ）の組の
+    /// 数までで、アドレス空間はメモリ上にしかないので再起動すれば消える。
     pub fn remove_tag(&self, connection: &str, group: &str, tag: &str) -> Result<(), Error> {
         self.fixed_tags
             .remove_tag(&self.handle, connection, group, tag)

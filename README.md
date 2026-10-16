@@ -151,6 +151,6 @@ banto の ADR-0011 に合わせ、配布は git タグを予定する。crates.i
 
 ハブとの結合に必要な残件を記録する。
 
-- **削除されたノードの購読。** タグを削除すると `BadNodeIdUnknown` を通知する。MonitoredItem を残し、同じ NodeId が戻ったら購読を再開する。リネームは旧ノードの削除と新ノードの追加で表す。実 Subscription テストで検証済み。ハブのタグレジストリとは banto-industrial #627 で結合した。
+- **削除されたノードの購読。** タグを削除すると `BadNodeIdUnknown` を通知する。MonitoredItem を残し、同じ NodeId が戻ったら購読を再開する。リネームは旧ノードの削除と新ノードの追加で表す。接続やグループの名前を変えると、古い名前の空フォルダーがサーバーの再起動まで Browse に残る（UaExpert などで見える）。実 Subscription テストで検証済み。ハブのタグレジストリとは banto-industrial #627 で結合した。
 - **非有限値と bit。** core の値・品質変換をハブの現在値へ接続する。Hub の共通読み取りは [banto-industrial #615](https://github.com/tyaro/banto-industrial/issues/615) で値なし・Bad に統一された。
 - **品質だけの変化。** [async-opcua PR #274](https://github.com/FreeOpcUa/async-opcua/pull/274) の修正済みコミットを固定し、フィルタ未指定でも Good → Stale → Good の通知を実 Subscription テストで確認した。Good → Bad では core の契約どおり値を Null にして通知し、復帰も確認した。公開版への依存復帰と Null Variant 回避策の見直しは [#17](https://github.com/tyaro/banto-opcua/issues/17) で追跡する。ハブの実タグとは banto-industrial #627 で結合した。
