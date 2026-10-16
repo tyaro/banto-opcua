@@ -2,7 +2,10 @@
 //!
 //! Phase 1 の固定タグと、追加・削除できるタグを Objects 以下に公開する。
 
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
 use opcua::{
     server::{ANONYMOUS_USER_TOKEN_ID, ServerBuilder, ServerEndpoint, ServerHandle},
@@ -33,7 +36,10 @@ impl OpcUaServer {
     /// 未指定アドレス（`0.0.0.0` / `::`）で、`advertised_host` が無いときは
     /// bind せずに [`Error::AdvertisedHostRequired`] を返す。ループバック以外へ
     /// 公開するときは警告ログを出す。
-    pub async fn start(config: ServerConfig) -> Result<RunningServer, Error> {
+    ///
+    /// `pki_dir` を作れないとき、または Unix で残す秘密鍵の権限を絞れないときは
+    /// [`Error::Pki`] を返す。
+    pub async fn start(mut config: ServerConfig) -> Result<RunningServer, Error> {
         if config.namespace_uri.trim().is_empty()
             || config.namespace_uri != config.namespace_uri.trim()
             || config.namespace_uri == "http://opcfoundation.org/UA/"
@@ -57,7 +63,7 @@ impl OpcUaServer {
             return Err(Error::InvalidAdvertisedHost(host.to_owned()));
         }
 
-        let pki = tempfile::tempdir().map_err(Error::Pki)?;
+        let pki = Pki::prepare(config.pki_dir.take())?;
         let listener = TcpListener::bind((config.bind, config.port))
             .await
             .map_err(Error::Bind)?;
@@ -80,7 +86,7 @@ impl OpcUaServer {
             .product_uri(config.product_uri)
             .create_sample_keypair(true)
             .certificate_path("own/cert.der")
-            .private_key_path("private/private.pem")
+            .private_key_path(PRIVATE_KEY_PATH)
             .pki_dir(pki.path())
             .host(endpoint_host)
             .port(local_addr.port())
@@ -95,10 +101,11 @@ impl OpcUaServer {
         // 必要なクライアントには、実際に 0 ms の監視項目を作れるようにする。
         builder.limits_mut().subscriptions.min_sampling_interval_ms = 0.0;
         let (server, handle) = builder.build().map_err(Error::Build)?;
+        pki.restrict_private_key()?;
         let fixed_tags = FixedTags::register(&handle, &namespace_uri, config.sample_tags)?;
 
         // 一時ディレクトリはタスクが所有する。Drop が先に消すと、停止前の
-        // サーバーが証明書を読めなくなる。
+        // サーバーが証明書を読めなくなる。`pki_dir` は呼び出し側が所有し、消さない。
         let task = tokio::spawn(async move {
             let _pki = pki;
             server.run_with(listener).await
@@ -111,6 +118,57 @@ impl OpcUaServer {
             fixed_tags,
             task: Some(task),
         })
+    }
+}
+
+const PRIVATE_KEY_PATH: &str = "private/private.pem";
+
+/// 自己署名証明書の置き場。一時ディレクトリは停止とともに消え、
+/// `pki_dir` は次の起動で同じ鍵を読み直すために残す。
+enum Pki {
+    Temporary(tempfile::TempDir),
+    Persistent(PathBuf),
+}
+
+impl Pki {
+    fn prepare(dir: Option<PathBuf>) -> Result<Self, Error> {
+        match dir {
+            Some(dir) => {
+                std::fs::create_dir_all(&dir).map_err(Error::Pki)?;
+                Ok(Self::Persistent(dir))
+            }
+            None => tempfile::tempdir().map(Self::Temporary).map_err(Error::Pki),
+        }
+    }
+
+    fn path(&self) -> &Path {
+        match self {
+            Self::Temporary(dir) => dir.path(),
+            Self::Persistent(dir) => dir,
+        }
+    }
+
+    /// 残す秘密鍵を所有者だけが読めるようにする。async-opcua は umask の
+    /// 権限で書くため、作成直後と既存の鍵の両方をここで絞る。一時ディレクトリは
+    /// tempfile が所有者だけに作り、停止で消えるので触らない。
+    #[cfg(unix)]
+    fn restrict_private_key(&self) -> Result<(), Error> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let Self::Persistent(dir) = self else {
+            return Ok(());
+        };
+        let key = dir.join(PRIVATE_KEY_PATH);
+        if let Some(dir) = key.parent() {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(Error::Pki)?;
+        }
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).map_err(Error::Pki)
+    }
+
+    #[cfg(not(unix))]
+    fn restrict_private_key(&self) -> Result<(), Error> {
+        Ok(())
     }
 }
 
