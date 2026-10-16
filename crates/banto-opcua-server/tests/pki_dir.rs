@@ -8,6 +8,25 @@ use banto_opcua_server::{OpcUaServer, ServerConfig};
 const CERT: &str = "own/cert.der";
 const KEY: &str = "private/private.pem";
 
+/// Unix では秘密鍵とそのディレクトリが所有者だけのものになっている。
+fn assert_private_key_is_owner_only(pki: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode =
+            |path: &Path| fs::metadata(path).expect("権限を読む").permissions().mode() & 0o777;
+        assert_eq!(mode(&pki.join(KEY)), 0o600, "秘密鍵は所有者だけが読める");
+        assert_eq!(
+            mode(pki.join(KEY).parent().expect("private")),
+            0o700,
+            "秘密鍵のディレクトリは所有者だけが開ける"
+        );
+    }
+    #[cfg(not(unix))]
+    let _ = pki;
+}
+
 async fn start_and_read(pki: &Path) -> (Vec<u8>, Vec<u8>) {
     let server = OpcUaServer::start(ServerConfig::default().with_port(0).with_pki_dir(pki))
         .await
@@ -44,19 +63,7 @@ async fn pki_dir_reuses_the_generated_keypair_across_restarts() {
     let second = start_and_read(&pki).await;
     assert_eq!(first, second, "2 回目の起動は鍵と証明書を作り直さない");
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mode =
-            |path: &Path| fs::metadata(path).expect("権限を読む").permissions().mode() & 0o777;
-        assert_eq!(mode(&pki.join(KEY)), 0o600, "秘密鍵は所有者だけが読める");
-        assert_eq!(
-            mode(pki.join(KEY).parent().expect("private")),
-            0o700,
-            "秘密鍵のディレクトリは所有者だけが開ける"
-        );
-    }
+    assert_private_key_is_owner_only(&pki);
 }
 
 /// 初回生成の途中で落ちるなどして片方だけ残ったら、組で作り直して起動する。
@@ -71,6 +78,7 @@ async fn pki_dir_regenerates_a_keypair_when_one_half_is_missing() {
     let (cert_after_lost_key, key_after_lost_key) = start_and_read(&pki).await;
     assert_ne!(cert_after_lost_key, cert, "残った証明書は使わず作り直す");
     assert_ne!(key_after_lost_key, key);
+    assert_private_key_is_owner_only(&pki);
 
     // 秘密鍵だけ残っている。
     fs::remove_file(pki.join(CERT)).expect("証明書を消す");
@@ -80,4 +88,5 @@ async fn pki_dir_regenerates_a_keypair_when_one_half_is_missing() {
         "残った秘密鍵は使わず作り直す"
     );
     assert_ne!(cert_after_lost_cert, cert_after_lost_key);
+    assert_private_key_is_owner_only(&pki);
 }

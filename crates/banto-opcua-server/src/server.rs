@@ -132,7 +132,9 @@ const PRIVATE_KEY_PATH: &str = "private/private.pem";
 fn discard_unpaired_keypair(dir: &Path) -> Result<(), Error> {
     let cert = dir.join(CERTIFICATE_PATH);
     let key = dir.join(PRIVATE_KEY_PATH);
-    let lone = match (cert.exists(), key.exists()) {
+    // 権限エラーなどを「無い」と取り違えて、残っている片方を消さない。
+    let exists = |path: &Path| path.try_exists().map_err(Error::Pki);
+    let lone = match (exists(&cert)?, exists(&key)?) {
         (true, false) => cert,
         (false, true) => key,
         _ => return Ok(()),
@@ -185,7 +187,11 @@ impl Pki {
         let key = dir.join(PRIVATE_KEY_PATH);
         // async-opcua は生成に失敗しても鍵なしで起動を続ける（SecurityPolicy None では
         // 使わない）。絞る鍵が無いときは、その起動を止めない。
-        if !key.exists() {
+        if !key.try_exists().map_err(Error::Pki)? {
+            tracing::warn!(
+                path = %key.display(),
+                "pki_dir に秘密鍵を作れなかったため、証明書なしで起動します"
+            );
             return Ok(());
         }
         std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).map_err(Error::Pki)
