@@ -20,6 +20,8 @@
 - Python asyncua と opc-plc を使う外部相互接続テスト。固定タグの Browse・Read・購読と外部サーバーの UInt32 タグ Read を検証する。
 - フィルタ未指定の購読で品質だけが変わる場合の通知テスト。修正を含む async-opcua の upstream コミットを一時的に固定する。
 - `RunningServer::add_tag` / `remove_tag`。削除時に `BadNodeIdUnknown` を通知し、同じ NodeId の再登録で既存の購読を再開する。
+- 動的タグの型・値・品質・時刻を受け取る `TagReading` と `add_tag_reading` / `update_tag_reading`。未取得時も DataType を保持し、Read / Subscription に既知の時刻だけを公開する。
+- `ServerConfig::with_sample_tags(false)`。Phase 1 の固定サンプルを外して実タグの外部名との衝突を避ける。
 
 ### 修正
 

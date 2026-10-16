@@ -12,10 +12,14 @@ use opcua::{
         node_manager::memory::{SimpleNodeManager, simple_node_manager},
     },
     types::{
-        AttributeId, DataValue, DateTime, NodeId, ObjectId, QualifiedName, ReferenceTypeId,
-        StatusCode, TimestampsToReturn, VariableTypeId, Variant,
+        AttributeId, DataTypeId, DataValue, DateTime, NodeId, ObjectId, QualifiedName,
+        ReferenceTypeId, StatusCode, TimestampsToReturn, VariableTypeId, Variant,
     },
 };
+
+use banto_opcua_core::DataType;
+
+use opcua::server::address_space::NodeType;
 
 use crate::Error;
 
@@ -41,9 +45,18 @@ pub(crate) struct FixedTags {
     pub(crate) manager: Arc<SimpleNodeManager>,
 }
 
+struct InitialTagValue {
+    placeholder: Variant,
+    data_value: DataValue,
+}
+
 impl FixedTags {
     /// 起動前に固定階層を登録する。
-    pub fn register(handle: &ServerHandle, namespace_uri: &str) -> Result<Self, Error> {
+    pub fn register(
+        handle: &ServerHandle,
+        namespace_uri: &str,
+        sample_tags: bool,
+    ) -> Result<Self, Error> {
         let namespace_index = handle
             .get_namespace_index(namespace_uri)
             .ok_or_else(|| Error::Build("固定タグの名前空間が登録されていません".to_owned()))?;
@@ -52,15 +65,16 @@ impl FixedTags {
             .get_by_name::<SimpleNodeManager>(MANAGER_NAME)
             .ok_or_else(|| Error::Build("固定タグの node manager がありません".to_owned()))?;
         let banto = NodeId::new(namespace_index, ROOT_NAME);
-        let plc = NodeId::new(namespace_index, "PLC1");
-        let line = NodeId::new(namespace_index, "PLC1.Line1");
         {
             let mut space = manager.address_space().write();
-            for (id, name, parent) in [
-                (&banto, ROOT_NAME, ObjectId::ObjectsFolder.into()),
-                (&plc, "PLC1", banto.clone()),
-                (&line, "Line1", plc.clone()),
-            ] {
+            let mut folders = vec![(&banto, ROOT_NAME, ObjectId::ObjectsFolder.into())];
+            let plc = NodeId::new(namespace_index, "PLC1");
+            let line = NodeId::new(namespace_index, "PLC1.Line1");
+            if sample_tags {
+                folders.push((&plc, "PLC1", banto.clone()));
+                folders.push((&line, "Line1", plc.clone()));
+            }
+            for (id, name, parent) in folders {
                 let inserted =
                     ObjectBuilder::new(id, QualifiedName::new(namespace_index, name), name)
                         .is_folder()
@@ -73,10 +87,14 @@ impl FixedTags {
                 }
             }
 
-            for (name, value) in [
-                ("Speed", opcua::types::Variant::Double(0.0)),
-                ("Running", opcua::types::Variant::Boolean(false)),
-            ] {
+            for (name, value) in if sample_tags {
+                vec![
+                    ("Speed", Variant::Double(0.0)),
+                    ("Running", Variant::Boolean(false)),
+                ]
+            } else {
+                Vec::new()
+            } {
                 let id = NodeId::new(namespace_index, format!("PLC1.Line1.{name}"));
                 let inserted = space.insert::<_, NodeId>(
                     Variable::new(&id, QualifiedName::new(namespace_index, name), name, value),
@@ -128,6 +146,54 @@ impl FixedTags {
         value: Variant,
         after_insert: impl FnOnce(),
     ) -> Result<(), Error> {
+        self.add_tag_data_value_with(
+            handle,
+            connection,
+            group,
+            tag,
+            InitialTagValue {
+                placeholder: value.clone(),
+                data_value: DataValue::new_now(value),
+            },
+            after_insert,
+        )
+    }
+
+    pub fn add_tag_reading(
+        &self,
+        handle: &ServerHandle,
+        connection: &str,
+        group: &str,
+        tag: &str,
+        data_type: DataType,
+        value: DataValue,
+    ) -> Result<(), Error> {
+        let placeholder = match data_type {
+            DataType::Boolean => Variant::Boolean(false),
+            DataType::Double => Variant::Double(0.0),
+        };
+        self.add_tag_data_value_with(
+            handle,
+            connection,
+            group,
+            tag,
+            InitialTagValue {
+                placeholder,
+                data_value: value,
+            },
+            || {},
+        )
+    }
+
+    fn add_tag_data_value_with(
+        &self,
+        handle: &ServerHandle,
+        connection: &str,
+        group: &str,
+        tag: &str,
+        initial: InitialTagValue,
+        after_insert: impl FnOnce(),
+    ) -> Result<(), Error> {
         validate_path(connection, group, tag)?;
         let connection_id = NodeId::new(self.namespace_index, connection);
         let group_id = NodeId::new(self.namespace_index, format!("{connection}.{group}"));
@@ -155,14 +221,13 @@ impl FixedTags {
                 )));
             }
         }
-        let initial = DataValue::new_now(value.clone());
         let mut variable = Variable::new(
             &tag_id,
             QualifiedName::new(self.namespace_index, tag),
             tag,
-            value,
+            initial.placeholder,
         );
-        variable.set_data_value(initial.clone());
+        variable.set_data_value(initial.data_value);
         if !space.insert::<_, NodeId>(variable, None) {
             return Err(Error::TagUpdate(format!("タグ {tag_id} を登録できません")));
         }
@@ -177,6 +242,45 @@ impl FixedTags {
         // 通常の値更新と同じ sampler で監視項目ごとにノードを読み直す。
         handle.subscriptions().maybe_notify(
             [(&tag_id, AttributeId::Value)].into_iter(),
+            |id, attribute, range, encoding| {
+                space.find(id)?.as_node().get_attribute(
+                    TimestampsToReturn::Both,
+                    attribute,
+                    range,
+                    encoding,
+                )
+            },
+        );
+        Ok(())
+    }
+
+    pub fn update_tag_reading(
+        &self,
+        handle: &ServerHandle,
+        connection: &str,
+        group: &str,
+        tag: &str,
+        data_type: DataType,
+        value: DataValue,
+    ) -> Result<(), Error> {
+        validate_path(connection, group, tag)?;
+        let id = NodeId::new(self.namespace_index, format!("{connection}.{group}.{tag}"));
+        let expected: NodeId = match data_type {
+            DataType::Boolean => DataTypeId::Boolean.into(),
+            DataType::Double => DataTypeId::Double.into(),
+        };
+        let mut space = self.manager.address_space().write();
+        let Some(NodeType::Variable(variable)) = space.find_mut(&id) else {
+            return Err(Error::TagUpdate(format!("タグ {id} が見つかりません")));
+        };
+        if variable.data_type() != expected {
+            return Err(Error::TagUpdate(format!(
+                "タグ {id} の DataType が一致しません"
+            )));
+        }
+        variable.set_data_value(value);
+        handle.subscriptions().maybe_notify(
+            [(&id, AttributeId::Value)].into_iter(),
             |id, attribute, range, encoding| {
                 space.find(id)?.as_node().get_attribute(
                     TimestampsToReturn::Both,

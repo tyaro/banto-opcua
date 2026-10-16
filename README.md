@@ -30,9 +30,14 @@ crates/
 `banto-opcua-core` は async-opcua に依存しない。サーバーとクライアントが
 境界で core の型と async-opcua の型を変換する。
 
-Phase 1 の固定タグを公開する。`Objects/Banto/PLC1/Line1` の `Speed` と
-`Running` を Browse / Read / Subscribe できる。ハブのタグレジストリ、
-設定 UI はまだ接続していない。
+Phase 1 の固定タグを既定で公開する。`Objects/Banto/PLC1/Line1` の `Speed` と
+`Running` を Browse / Read / Subscribe できる。`ServerConfig::with_sample_tags(false)`
+で試験用タグを外し、同じ外部名の実タグを登録できる。
+`RunningServer::add_tag_reading` / `update_tag_reading` は型・値・品質・時刻を
+`TagReading` で受け取り、読み取り専用の Read / Subscription へ反映する。
+未取得でも DataType を保持し、SourceTimestamp が不明なら null のままにする。
+この境界の理由は [ADR-0002](docs/adr/0002-dynamic-reading-boundary.md) に記す。
+ハブのタグレジストリ、設定 UI はまだ接続していない。
 
 ## ロードマップ（banto-industrial #201）
 

@@ -13,7 +13,7 @@ use tokio::{net::TcpListener, task::JoinHandle};
 use banto_opcua_core::{DataType, MappedValue, Quality, map_current_value};
 
 use crate::{
-    Error, ServerConfig,
+    Error, ServerConfig, TagReading,
     config::{
         host_is_loopback, host_is_unspecified, normalize_endpoint_path, valid_advertised_host,
     },
@@ -93,7 +93,7 @@ impl OpcUaServer {
             .with_node_manager(fixed_tags::node_manager(namespace_uri.clone()))
             .build()
             .map_err(Error::Build)?;
-        let fixed_tags = FixedTags::register(&handle, &namespace_uri)?;
+        let fixed_tags = FixedTags::register(&handle, &namespace_uri, config.sample_tags)?;
 
         // 一時ディレクトリはタスクが所有する。Drop が先に消すと、停止前の
         // サーバーが証明書を読めなくなる。
@@ -170,6 +170,44 @@ impl RunningServer {
         };
         self.fixed_tags
             .add_tag(&self.handle, connection, group, tag, value)
+    }
+
+    /// 実データの型・品質・時刻を保持したまま、読み取り専用タグを登録する。
+    /// 値が未取得でも DataType は `reading.data_type` で確定する。
+    pub fn add_tag_reading(
+        &self,
+        connection: &str,
+        group: &str,
+        tag: &str,
+        reading: TagReading,
+    ) -> Result<(), Error> {
+        self.fixed_tags.add_tag_reading(
+            &self.handle,
+            connection,
+            group,
+            tag,
+            reading.data_type,
+            reading.data_value(),
+        )
+    }
+
+    /// 登録済みタグの値・品質・時刻を更新し、購読者へ変更を通知する。
+    /// DataType の変更は同じ NodeId への更新ではなく削除・再登録で行う。
+    pub fn update_tag_reading(
+        &self,
+        connection: &str,
+        group: &str,
+        tag: &str,
+        reading: TagReading,
+    ) -> Result<(), Error> {
+        self.fixed_tags.update_tag_reading(
+            &self.handle,
+            connection,
+            group,
+            tag,
+            reading.data_type,
+            reading.data_value(),
+        )
     }
 
     /// タグを削除し、既存の購読へ `BadNodeIdUnknown` を通知する。
