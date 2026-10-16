@@ -146,11 +146,14 @@ async fn dynamic_readings_keep_type_quality_and_timestamps_through_subscription(
         )
         .await
         .expect("購読を作る");
-    let request: MonitoredItemCreateRequest = speed.clone().into();
-    session
+    let mut request: MonitoredItemCreateRequest = speed.clone().into();
+    request.requested_parameters.sampling_interval = 0.0;
+    let items = session
         .create_monitored_items(subscription, TimestampsToReturn::Both, vec![request])
         .await
         .expect("監視項目を作る");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].result.revised_sampling_interval, 0.0);
     assert_change(
         &mut receiver,
         Some(Variant::Empty),
@@ -192,6 +195,37 @@ async fn dynamic_readings_keep_type_quality_and_timestamps_through_subscription(
             .await
             .source_timestamp,
         repeated.source_timestamp
+    );
+
+    server
+        .update_tag_reading(
+            "PLC1",
+            "Line1",
+            "Speed",
+            reading(
+                DataType::Double,
+                Some(12.75),
+                Quality::Good,
+                Some(150),
+                None,
+                160,
+            ),
+        )
+        .expect("50 ms 後の採取値を反映する");
+    assert_change(
+        &mut receiver,
+        Some(Variant::Double(12.75)),
+        StatusCode::Good,
+        Some(150),
+        160,
+    )
+    .await;
+    assert_reading(
+        &read_attribute(&session, &speed, AttributeId::Value).await,
+        Some(Variant::Double(12.75)),
+        StatusCode::Good,
+        Some(150),
+        160,
     );
 
     server

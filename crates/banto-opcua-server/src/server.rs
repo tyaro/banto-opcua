@@ -74,7 +74,7 @@ impl OpcUaServer {
         }
 
         let namespace_uri = config.namespace_uri.clone();
-        let (server, handle) = ServerBuilder::new()
+        let mut builder = ServerBuilder::new()
             .application_name(config.application_name)
             .application_uri(config.application_uri)
             .product_uri(config.product_uri)
@@ -90,9 +90,11 @@ impl OpcUaServer {
                 ServerEndpoint::new_none(&path, &[ANONYMOUS_USER_TOKEN_ID.to_owned()]),
             )
             .discovery_urls(vec![endpoint.clone()])
-            .with_node_manager(fixed_tags::node_manager(namespace_uri.clone()))
-            .build()
-            .map_err(Error::Build)?;
+            .with_node_manager(fixed_tags::node_manager(namespace_uri.clone()));
+        // async-opcua の既定値 100 ms は 0 要求も補正する。厳密な採取時刻が
+        // 必要なクライアントには、実際に 0 ms の監視項目を作れるようにする。
+        builder.limits_mut().subscriptions.min_sampling_interval_ms = 0.0;
+        let (server, handle) = builder.build().map_err(Error::Build)?;
         let fixed_tags = FixedTags::register(&handle, &namespace_uri, config.sample_tags)?;
 
         // 一時ディレクトリはタスクが所有する。Drop が先に消すと、停止前の
@@ -149,7 +151,7 @@ impl RunningServer {
 
     /// `{connection}.{group}.{tag}` の読み取り専用タグを追加する。
     /// 同じ NodeId が既にあればエラー。接続・グループのフォルダーは必要なら作る。
-    /// 各名前は空文字と `.` を含めず、接続名 `Banto` は予約済み。
+    /// 各名前は空文字にできない。ドットと接続名 `Banto` は使用できる。
     /// 初期値には登録時刻を付ける試験用 API。
     /// ハブの実データと SourceTimestamp の結合は banto-industrial #201 で行う。
     pub fn add_tag(

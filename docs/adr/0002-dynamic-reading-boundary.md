@@ -19,6 +19,8 @@
 core の写像を使い、時刻は呼び出し側が選んだものだけを変換する。未取得でも
 Boolean / Double の DataType を登録時に固定し、値なし・Bad を公開できる。
 更新はノードの型確認・値の保存・購読通知を同じアドレス空間の排他区間で行う。
+Variable NodeId は外部名を連結した文字列とする。同じ文字列になる別の名前の
+分割は二重登録を拒否し、更新・削除では登録先グループからの参照も照合する。
 
 Phase 1 のサンプルタグは既定で残し、ハブは `with_sample_tags(false)` で外す。
 これにより実タグがサンプルと同じ外部名でも衝突しない。
@@ -38,7 +40,8 @@ Phase 1 のサンプルタグは既定で残し、ハブは `with_sample_tags(fa
 ハブは更新・品質変化を定期的にサーバーへ反映し、削除・リネーム・型変更は
 削除と再登録で表す。SourceTimestamp が不明なときは現在時刻で補わない。
 公開範囲を選ぶハブ側の設定では、サンプルタグを無効にする必要がある。
-Read と sampling interval が 0 の購読は、渡された SourceTimestamp を保持する。
+サーバーの最小 sampling interval を 0 ms とし、0 を要求した購読は補正後も
+0 ms で作成する。Read と 0 ms の購読は、渡された SourceTimestamp を保持する。
 非ゼロの sampling interval で遅延した通知は、基盤の async-opcua が
 SourceTimestamp を次のサンプル時刻へ置き換える。厳密な採取時刻が必要な購読では
 sampling interval を 0 に設定する。

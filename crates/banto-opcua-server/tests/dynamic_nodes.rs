@@ -1,8 +1,11 @@
 //! ノード削除後も購読を保ち、同じ NodeId の復帰とリネームを確認する。
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
-use banto_opcua_server::{OpcUaServer, ServerConfig, model::MappedValue};
+use banto_opcua_server::{
+    OpcUaServer, ServerConfig, TagReading,
+    model::{DataType, MappedValue, Quality, SampleTimestamps},
+};
 use opcua::{
     client::{ClientBuilder, DataChangeCallback, IdentityToken, Session},
     crypto::SecurityPolicy,
@@ -227,6 +230,48 @@ async fn deleted_node_notifies_and_reappearing_node_resumes_the_same_subscriptio
         read_value(&session, &dotted).await.status(),
         StatusCode::BadNodeIdUnknown
     );
+
+    // 同じ外部名になる別の分割から、既存タグを更新・削除してはならない。
+    server
+        .add_tag("a.b", "c", "d", MappedValue::Double(14.0))
+        .expect("元の階層に登録する");
+    let ambiguous = NodeId::new(ns, "a.b.c.d");
+    for (connection, group, tag) in [("a", "b.c", "d"), ("a", "b", "c.d")] {
+        assert!(
+            server
+                .add_tag(connection, group, tag, MappedValue::Double(15.0))
+                .is_err(),
+            "別の分割での二重登録を拒否する"
+        );
+        assert!(
+            server
+                .update_tag_reading(
+                    connection,
+                    group,
+                    tag,
+                    TagReading::new(
+                        DataType::Double,
+                        Some(15.0),
+                        Quality::Good,
+                        SampleTimestamps::new(None, SystemTime::now()),
+                    ),
+                )
+                .is_err(),
+            "別の分割からの更新を拒否する"
+        );
+        assert!(
+            server.remove_tag(connection, group, tag).is_err(),
+            "別の分割からの削除を拒否する"
+        );
+        assert_eq!(
+            read_value(&session, &ambiguous).await.value,
+            Some(Variant::Double(14.0)),
+            "拒否後も元の値を保持する"
+        );
+    }
+    server
+        .remove_tag("a.b", "c", "d")
+        .expect("元の分割からは削除できる");
 
     session.disconnect().await.expect("クライアントを切断する");
     task.abort();

@@ -265,11 +265,17 @@ impl FixedTags {
     ) -> Result<(), Error> {
         validate_path(connection, group, tag)?;
         let id = NodeId::new(self.namespace_index, format!("{connection}.{group}.{tag}"));
+        let group_id = folder_id(self.namespace_index, &[connection, group]);
         let expected: NodeId = match data_type {
             DataType::Boolean => DataTypeId::Boolean.into(),
             DataType::Double => DataTypeId::Double.into(),
         };
         let mut space = self.manager.address_space().write();
+        if !space.has_reference(&group_id, &id, ReferenceTypeId::HasComponent) {
+            return Err(Error::TagUpdate(format!(
+                "タグ {id} は指定されたグループに属しません"
+            )));
+        }
         let Some(NodeType::Variable(variable)) = space.find_mut(&id) else {
             return Err(Error::TagUpdate(format!("タグ {id} が見つかりません")));
         };
@@ -303,9 +309,14 @@ impl FixedTags {
     ) -> Result<(), Error> {
         validate_path(connection, group, tag)?;
         let id = NodeId::new(self.namespace_index, format!("{connection}.{group}.{tag}"));
+        let group_id = folder_id(self.namespace_index, &[connection, group]);
         let mut space = self.manager.address_space().write();
-        if !space.node_exists(&id) {
-            return Err(Error::TagUpdate(format!("タグ {id} が見つかりません")));
+        if !space.node_exists(&id)
+            || !space.has_reference(&group_id, &id, ReferenceTypeId::HasComponent)
+        {
+            return Err(Error::TagUpdate(format!(
+                "タグ {id} は指定されたグループにありません"
+            )));
         }
         let now = DateTime::now();
         handle.subscriptions().notify_data_change(
