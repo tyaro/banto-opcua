@@ -25,7 +25,7 @@ banto-opcua-core = { path = "crates/banto-opcua-core" }
 # feature だけを有効にする（両方を core へ入れない）。
 # 0.19.0 未収録の品質変更通知修正（upstream #274）と採取時刻保持修正（fork PR #1）。
 # #17: 両修正を含む公開版が出たら crates.io に戻す。
-async-opcua = { git = "https://github.com/tyaro/async-opcua", rev = "c43e77b5cffb732959e2c1c9b73d0ba07a46a4bb", default-features = false }
+async-opcua = { git = "https://github.com/tyaro/async-opcua", rev = "60c4f9d72218d78177e59c70a03db7fddcf9d857", default-features = false }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
 # サンプル鍵の置き場。Phase 3 の証明書ディレクトリに置き換えるまでの足場。

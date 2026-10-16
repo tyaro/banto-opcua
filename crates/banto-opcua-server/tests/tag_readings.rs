@@ -279,9 +279,9 @@ async fn dynamic_readings_keep_type_quality_and_timestamps_through_subscription(
             "Speed",
             reading(
                 DataType::Double,
-                Some(12.5),
+                Some(12.75),
                 Quality::Stale,
-                Some(100),
+                Some(150),
                 Some(200),
                 210,
             ),
@@ -289,7 +289,7 @@ async fn dynamic_readings_keep_type_quality_and_timestamps_through_subscription(
         .expect("同じ値を Stale にする");
     assert_change(
         &mut receiver,
-        Some(Variant::Double(12.5)),
+        Some(Variant::Double(12.75)),
         StatusCode::UncertainLastUsableValue,
         Some(200),
         210,
