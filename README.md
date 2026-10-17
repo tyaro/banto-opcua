@@ -90,7 +90,7 @@ Phase 1 の試験用セキュリティは `None` / `None` / Anonymous。既定 b
 | プロセス内 | 同上 | ループバックで `ServerStatus/State` を読む。固定タグは Browse / Read / DataChange 通知と、サンプルタグが読み取り専用の AccessLevel であることを確認する。Write は拒否の StatusCode、遅いハンドラーの間も Read と購読が止まらないこと、ノード数と同時実行数の上限、CloseSession 後に残りのノードを書かないことを確認する（`tests/write.rs`）。IPv6 が使える環境では `[::1]` でも標準ノードの疎通を見る |
 | 接続失敗 | 接続処理を変更する PR・毎日・手動（Linux と Windows） | Discovery だけを通すプロキシでセッションを止め、時間切れとキャンセルで TCP 接続が閉じることを確認する。PR の必須 `ci-gate` には含めない |
 | 相互接続 | 別ワークフロー（`workflow_dispatch`、毎日、main への push、PR はパスで絞る） | Python asyncua → 本サーバーの GetEndpoints / Browse / Read / Subscription / Write と、本クライアント → opc-plc のタグ Read。固定バージョンと実行方法は [`interop/README.md`](interop/README.md) |
-| 手動 | 開発者の手元 | 下記のサンプルサーバーを起動し、UaExpert から Browse / Read / Subscribe / Write |
+| 手動 | 開発者の手元 | 下記のサンプルサーバーを起動し、UaExpert から Browse / Read / Subscribe。Write は [書き込みの手動確認](#書き込みの手動確認uaexpert) の手順 |
 | 後続 | 認証試験が要るとき | OPC Foundation Compliance Test Tool（CTT） |
 
 プロセス内テストは外部プロセスもコンテナも要らない。相互接続は PR の
@@ -141,9 +141,13 @@ MonitoredItem に DataChange が届く。`q` で停止する。
 2. Value に `12.5` を書く。UaExpert の Write は成功し、端末に `WRITE` 行が出る。
    ノードの値は変わらない。
 3. 端末で `reflect` と入力する。最後の書き込みを機器から戻った値として反映し、
-   Data Access View の値が `12.5` になる。
-4. `Locked` への書き込みは `BadOutOfService`、`PLC1/Line1/Speed` への書き込みは
-   `BadNotWritable` になる。
+   Data Access View の値が `12.5` になる。`reflect` は受け付けた書き込み 1 回につき
+   1 回だけ使える。反映する書き込みが無いとき（2 回目の `reflect` や `Locked` の
+   拒否の直後）と不明なコマンドでは、サンプルサーバーがエラーで終了する。
+4. `Locked` への書き込みは `BadOutOfService` になる。`PLC1/Line1/Speed` は
+   AccessLevel が CurrentRead のみで、UaExpert の版によっては値を編集できず Write を
+   送らない。送れたときは `BadNotWritable` になる（サーバー側の拒否は
+   `tests/write.rs` と相互接続テストでも確かめている）。
 5. 空行か `quit` で停止する。
 
 ## 開発
