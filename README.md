@@ -24,7 +24,7 @@ async-opcua を直接依存させない。
 crates/
   banto-opcua-core/    共有語彙（値、StatusCode、時刻、ノード、書き込みの要求と拒否の理由）。プロトコル非依存
   banto-opcua-server/  サーバー。既定 bind は 127.0.0.1。Write は利用者のハンドラーに通す（ADR-0004）
-  banto-opcua-client/  クライアント。Hub のドライバ向けの Read / Write の部品（ADR-0005、#33 で実装中）
+  banto-opcua-client/  クライアント。Hub のドライバ向けの Read / Write の部品（ADR-0005、#33 で実装）
 ```
 
 `banto-opcua-core` は async-opcua に依存しない。サーバーとクライアントが

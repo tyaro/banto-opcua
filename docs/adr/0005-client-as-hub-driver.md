@@ -42,17 +42,19 @@ async-opcua の型は出さない（ADR-0001、ADR-0002 と同じ境界）。
 - **接続:** SecurityPolicy None / Anonymous で、エンドポイント URL・接続の時間切れ・
   要求の時間切れ・keep-alive の間隔と失敗回数を受け取る。async-opcua の keep-alive は
   既定で切断を検知しない（`max_failed_keep_alive_count` が 0）ので、静かな切断を
-  見つけられるよう必ず設定する。要求の時間切れは収集の周期より短くする。
+  見つけられるよう必ず設定する。要求の時間切れは収集の周期より短くし、keep-alive の
+  間隔はセッションの時間切れより短くする（長いとセッションが失効する）。
 - **自動再接続を止める:** 接続が切れたら、それ以降の呼び出しは接続ごとの失敗を返す。
   張り直すのは Hub の broker で、新しく接続する。async-opcua では
-  `session_retry_limit(0)` だけでは切断後に 1 回張り直しを試すので、接続できた後に
-  `Session::disable_reconnects()` も呼ぶ。
+  `session_retry_limit(0)` だけでは切断後に 1 回張り直しを試すので、
+  `Session::disable_reconnects()` も呼ぶ。接続の前に呼んでも効くので、セッションを
+  作った直後、イベントループを動かす前に呼ぶ（初回の接続と切断の間の競合が無い）。
 - **まとめて Read:** NodeId の並びを受け取り、ノードごとに次を返す。
   - 値（下の型。値が無いときは `None`）
   - StatusCode（そのまま返す。Good / Uncertain / Bad をどの品質に写すかは Hub が決める）
   - SourceTimestamp（サーバーが付けなければ `None`。現在時刻で補わない）
 
-  機器から読み直すよう `maxAge` は 0 にする。
+  `TimestampsToReturn` は `Source`、機器から読み直すよう `maxAge` は 0 にする。
 - **まとめて Write:** NodeId と値の並びを受け取り、ノードごとの StatusCode を返す。
   送るのは Value 属性だけで、IndexRange は付けない。DataValue には値だけを入れ、
   StatusCode も時刻も付けない（時刻付きの Write を拒否するサーバーがある）。
@@ -60,22 +62,30 @@ async-opcua の型は出さない（ADR-0001、ADR-0002 と同じ境界）。
   エラーにするので、そのまま返すとタグが 0 件の接続で broker が再接続を繰り返す。
 - **要求の分割:** 接続時に `ServerCapabilities/OperationLimits` の `MaxNodesPerRead`
   （`i=11705`）と `MaxNodesPerWrite`（`i=11707`）を読み、超える要求は分けて送る。
-  - 値が 0（制限なし）、ノードが無い、Bad のときは、設定の既定値を使う。この Read の
-    失敗は接続ごとの失敗にしない。
-  - 広告値を守っても `BadTooManyOperations` を返すサーバーがある。そのときは塊を半分に
-    して送り直す（Write では、まだ書かれていない塊だけ）。
+  - 値が 0（制限なし）、ノードが無い、ノードの StatusCode が Bad のときは、設定の
+    既定値を使い、接続ごとの失敗にしない。Read のサービス自体が失敗した（切断、
+    時間切れ）ときは、接続ごとの失敗にする。接続時の NamespaceArray の Read も同じ。
+  - 広告値を守っても `BadTooManyOperations` を返すサーバーがある。サービス全体の拒否で
+    塊は適用されていないので、拒否された塊とそれ以降を半分の大きさにして送り直す。
+    1 ノードの塊でも拒否されたら、そこで接続ごとの失敗にする。
 - **失敗の分け方:** 接続ごとの失敗（切断、時間切れ、サービス全体のエラー）は `Err`、
   ノード単位の失敗は結果の StatusCode にする。`BrokerSession` の約束にそのまま写せる
   形にするため。応答の結果の数が要求と合わないときも、接続ごとの失敗にする。
 - **分けた Write の途中で失敗したとき:** Read は読み直せば済むが、Write は先に送った分が
   機器に届いている。そこで Write の `Err` には、ノードごとの結末を持たせる。
-  - **書いた結果:** 応答を受け取った分は、その StatusCode。
-  - **結果不明（届いたかもしれない）:** 送ったが応答を受け取れなかった分。
-    `BadTimeout`・`BadConnectionClosed`・`BadCommunicationError` に限る。
-  - **書かれていない（確実に）:** 送る前に失敗した分（`BadNotConnected` など）と、
-    まだ送っていない分。サーバーが要求ごと拒否した分（`BadTooManyOperations`、
-    `BadSessionIdInvalid` など。適用されていないことが確定している）もここに入れ、
-    拒否の StatusCode を持たせる。
+  - **書いた結果:** 応答を受け取り、結果の数が要求と合った分は、その StatusCode。
+  - **書かれていない（確実に）:** 次の閉じた一覧に限る。
+    - 送る前に失敗した分（`BadNotConnected` など）と、まだ送っていない分。
+    - 応答のサービス全体の結果が Bad だった分（`BadTooManyOperations`、
+      `BadSessionIdInvalid` など。適用されていないことが確定している）。拒否の
+      StatusCode を持たせる。
+  - **結果不明（届いたかもしれない）:** 要求を送った後の、上に当たらない失敗すべて。
+    たとえば `BadTimeout`・`BadConnectionClosed`・`BadCommunicationError`、応答の
+    符号化の上限超過（`BadEncodingLimitsExceeded`。サーバーは適用済みのことがある）、
+    応答の結果の数が要求と合わないとき。失敗の StatusCode を持たせる。
+
+  分からないものを「書かれていない」に入れると、適用されたかもしれない Write を未適用と
+  監査に残してしまう。そこで「書かれていない」を閉じた一覧にし、残りを結果不明にする。
 
   async-opcua のエラーからは StatusCode を取れるので、この分け方は async-opcua の型を
   公開せずに実装できる。Hub のドライバはこれを見て、書けたノード・書けたか分からない
@@ -85,7 +95,11 @@ async-opcua の型は出さない（ADR-0001、ADR-0002 と同じ境界）。
 
 - **NodeId の文字列表現の解析:**
   - 形は `ns=<index>;i=<number>`、`ns=<index>;s=<string>`、`nsu=<uri>;i=…`、
-    `nsu=<uri>;s=…`。`ns=` を省いた形は名前空間 0。
+    `nsu=<uri>;s=…`。`ns=` を省いた形は名前空間 0。`s=` の識別子は、`;` を含んでも
+    残りすべてを取る。
+  - 解析の結果は、名前空間を番号か URI のどちらかで持つ新しい型（ExpandedNodeId に
+    相当）にする。既存の `NodeId`（番号だけを持つ）はサーバー側の語彙として変えない。
+    クライアントの部品が接続時に、この型を `NodeId` へ解決する。
   - `nsu=` の形は Part 6 の ExpandedNodeId の文字列表現で、URI は百分率符号化されている
     （`;` は `%3B`、`%` は `%25` など）。解析で `%XX` を大文字・小文字を問わず復号し、
     復号した URI を NamespaceArray と比べる。たとえば `nsu=urn:vendor:a%3Bb;s=Tag` の
