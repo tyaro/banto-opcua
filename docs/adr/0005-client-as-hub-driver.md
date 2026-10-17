@@ -54,12 +54,23 @@ async-opcua の型は出さない（ADR-0001、ADR-0002 と同じ境界）。
 - **失敗の分け方:** 接続ごとの失敗（切断、時間切れ、サービス全体のエラー）は `Err`、
   ノード単位の失敗は結果の StatusCode にする。`BrokerSession` の約束にそのまま写せる
   形にするため。
+- **分けた Write の途中で接続が切れたとき:** Read は読み直せば済むが、Write は先に
+  送った分が機器に届いている。そこで Write の `Err` には、ノードごとの結末を持たせる。
+  - 応答を受け取った分は、その StatusCode。
+  - 送ったが応答を受け取れなかった分は「結果不明」（届いたかもしれない）。
+  - まだ送っていない分は「未送信」（届いていない）。
+
+  Hub のドライバはこれを見て、書けたノード・書けたか分からないノード・書いていない
+  ノードを区別して返し、監査に残す（banto-industrial #678）。
 
 ### core に置くもの
 
 - **NodeId の文字列表現の解析:**
   - 形は `ns=<index>;i=<number>`、`ns=<index>;s=<string>`、`nsu=<uri>;i=…`、
     `nsu=<uri>;s=…`。`ns=` を省いた形は名前空間 0。
+  - `nsu=` の URI は、OPC UA Part 6 の NodeId の文字列表現に従って百分率符号化
+    されている（`;` は `%3B` など）。解析で復号し、復号した URI を NamespaceArray と
+    比べる。たとえば `nsu=urn:vendor:a%3Bb;s=Tag` の URI は `urn:vendor:a;b`。
   - GUID（`g=`）と ByteString（`b=`）は、当面は解析エラーにする。
   - Hub は登録時にこの解析を使い、解析できないアドレスを登録させない。
 - **値の型:** OPC UA のスカラーの組み込み型（Boolean、SByte〜Int64、Byte〜UInt64、
