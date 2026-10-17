@@ -1,11 +1,14 @@
-"""Python asyncua から固定タグの Browse / Read / Subscription を確認する。"""
+"""Python asyncua から固定タグの Browse / Read / Subscription と、書き込み可の
+タグへの Write を確認する。"""
 
 import asyncio
 import select
 import subprocess
 import sys
 
-from asyncua import Client
+from asyncua import Client, ua
+
+CLIENT_URI = "urn:banto:opcua:interop-asyncua"
 
 
 class Changes:
@@ -16,8 +19,70 @@ class Changes:
         self.values.put_nowait((node.nodeid.to_string(), value, data))
 
 
+async def expect_line(process, prefix):
+    """サーバーの標準出力から `prefix` で始まる行を待つ。ほかの行は読み飛ばす。"""
+    while True:
+        line = await asyncio.wait_for(asyncio.to_thread(process.stdout.readline), timeout=10)
+        if not line:
+            raise RuntimeError(f"{prefix} の前にサーバーの出力が終わりました")
+        if line.startswith(prefix):
+            return line.strip()
+
+
+async def expect_rejection(write, error):
+    try:
+        await write
+    except error:
+        return
+    raise AssertionError(f"{error.__name__} で拒否されるはず")
+
+
+async def verify_writes(client, namespace, process):
+    cell = await client.nodes.objects.get_child(
+        [f"{namespace}:Banto", f"{namespace}:PLC2", f"{namespace}:Cell1"]
+    )
+    setpoint = await cell.get_child(f"{namespace}:Setpoint")
+    enable = await cell.get_child(f"{namespace}:Enable")
+    locked = await cell.get_child(f"{namespace}:Locked")
+    assert setpoint.nodeid.Identifier == "PLC2.Cell1.Setpoint"
+    read_write = ua.AccessLevel.CurrentRead.mask | ua.AccessLevel.CurrentWrite.mask
+    for attribute in (ua.AttributeIds.AccessLevel, ua.AttributeIds.UserAccessLevel):
+        level = await setpoint.read_attribute(attribute)
+        assert level.Value.Value == read_write, level
+
+    # write_value は SourceTimestamp を付けて送る。サーバーは時刻を捨てて受け付ける。
+    await setpoint.write_value(12.5, ua.VariantType.Double)
+    assert await expect_line(process, "WRITE ") == (
+        f"WRITE PLC2.Cell1.Setpoint 12.5 anonymous {CLIENT_URI}"
+    )
+    # Write だけではノードの値は変わらず、機器から戻った値で変わる。
+    assert await setpoint.read_value() == 0.0
+    process.stdin.write("reflect\n")
+    process.stdin.flush()
+    await expect_line(process, "REFLECTED")
+    assert await setpoint.read_value() == 12.5
+
+    await enable.write_value(True)
+    assert await expect_line(process, "WRITE ") == (
+        f"WRITE PLC2.Cell1.Enable true anonymous {CLIENT_URI}"
+    )
+    process.stdin.write("reflect\n")
+    process.stdin.flush()
+    await expect_line(process, "REFLECTED")
+    assert await enable.read_value() is True
+
+    speed = await client.nodes.objects.get_child(
+        [f"{namespace}:{name}" for name in ("Banto", "PLC1", "Line1", "Speed")]
+    )
+    await expect_rejection(speed.write_value(1.0), ua.uaerrors.BadNotWritable)
+    await expect_rejection(setpoint.write_value(True), ua.uaerrors.BadTypeMismatch)
+    await expect_rejection(locked.write_value(1.0), ua.uaerrors.BadOutOfService)
+
+
 async def verify(endpoint, process):
-    async with Client(url=endpoint, timeout=10) as client:
+    client = Client(url=endpoint, timeout=10)
+    client.application_uri = CLIENT_URI
+    async with client:
         endpoints = await client.get_endpoints()
         assert any(item.EndpointUrl == endpoint for item in endpoints), endpoints
 
@@ -88,6 +153,8 @@ async def verify(endpoint, process):
             assert await running.read_value() is True
         finally:
             await subscription.delete()
+
+        await verify_writes(client, namespace, process)
 
 
 def main():
