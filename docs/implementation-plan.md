@@ -2,7 +2,7 @@
 
 - 更新日: 2026-10-17
 - 親課題: [banto-industrial #201](https://github.com/tyaro/banto-industrial/issues/201)
-- 対象: 本リポジトリの [#3〜#9](https://github.com/tyaro/banto-opcua/issues)
+- 対象: 本リポジトリの [#3〜#9](https://github.com/tyaro/banto-opcua/issues) と [#25](https://github.com/tyaro/banto-opcua/issues/25)
 
 ## 現在地と完了の単位
 
