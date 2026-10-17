@@ -22,7 +22,13 @@ class Changes:
 async def expect_line(process, prefix):
     """サーバーの標準出力から `prefix` で始まる行を待つ。ほかの行は読み飛ばす。"""
     while True:
-        line = await asyncio.wait_for(asyncio.to_thread(process.stdout.readline), timeout=10)
+        try:
+            line = await asyncio.wait_for(asyncio.to_thread(process.stdout.readline), timeout=10)
+        except TimeoutError:
+            # 読み取りのスレッドは中止できないので、サーバーを止めて EOF で抜けさせる。
+            # 残すと asyncio.run がスレッドの終了を待ち、失敗の報告が遅れる。
+            process.kill()
+            raise
         if not line:
             raise RuntimeError(f"{prefix} の前にサーバーの出力が終わりました")
         if line.startswith(prefix):
