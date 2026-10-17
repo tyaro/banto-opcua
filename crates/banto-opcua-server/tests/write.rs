@@ -158,6 +158,19 @@ fn tag_id(server: &RunningServer, tag: &str) -> NodeId {
 }
 
 async fn connect(server: &RunningServer) -> (Arc<Session>, tempfile::TempDir) {
+    let (session, pki, _event_loop) = connect_with_event_loop(server).await;
+    (session, pki)
+}
+
+/// 接続し、クライアントのイベントループのタスクも返す。止めると CloseSession を
+/// 送らずに TCP が切れる。
+async fn connect_with_event_loop(
+    server: &RunningServer,
+) -> (
+    Arc<Session>,
+    tempfile::TempDir,
+    tokio::task::JoinHandle<StatusCode>,
+) {
     let pki = tempfile::tempdir().expect("一時 PKI を作る");
     let mut client = ClientBuilder::new()
         .application_name("banto-opcua-write-test")
@@ -181,13 +194,13 @@ async fn connect(server: &RunningServer) -> (Arc<Session>, tempfile::TempDir) {
         )
         .await
         .expect("エンドポイントに接続する");
-    event_loop.spawn();
+    let event_loop = event_loop.spawn();
     assert!(
         tokio::time::timeout(Duration::from_secs(10), session.wait_for_connection())
             .await
             .expect("接続待ちが時間切れ")
     );
-    (session, pki)
+    (session, pki, event_loop)
 }
 
 fn value_write(id: &NodeId, value: DataValue) -> WriteValue {
@@ -655,6 +668,36 @@ async fn closing_the_session_finishes_the_running_node_and_skips_the_rest() {
     assert_eq!(recv(&mut harness.finished).await, "Slow1");
     let _ = tokio::time::timeout(Duration::from_secs(10), writer).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
+    harness.assert_no_calls();
+    harness.server.shutdown().await.expect("サーバーを停止する");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropping_the_connection_finishes_the_running_node_and_skips_the_rest() {
+    let mut harness = Harness::start(ServerConfig::default()).await;
+    let (session, _pki, event_loop) = connect_with_event_loop(&harness.server).await;
+    let first = harness.writable("Slow1");
+    let second = harness.writable("Slow2");
+
+    let writer = {
+        let session = session.clone();
+        let requests = [
+            value_write(&first, double(1.0)),
+            value_write(&second, double(1.0)),
+        ];
+        tokio::spawn(async move { session.write(&requests).await })
+    };
+    assert_eq!(recv(&mut harness.calls).await.tag, "Slow1");
+    // CloseSession を送らずに TCP だけを切る。
+    event_loop.abort();
+    writer.abort();
+    // サーバーが切断に気づいて要求を捨てるのを待ってから、走っている 1 件を進める。
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // 走っている 1 件は最後まで終わり、残りのノードではハンドラーを呼ばない。
+    harness.gate.add_permits(2);
+    assert_eq!(recv(&mut harness.finished).await, "Slow1");
+    tokio::time::sleep(Duration::from_millis(500)).await;
     harness.assert_no_calls();
     harness.server.shutdown().await.expect("サーバーを停止する");
 }

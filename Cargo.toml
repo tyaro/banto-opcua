@@ -23,9 +23,10 @@ rust-version = "1.98.1"
 banto-opcua-core = { path = "crates/banto-opcua-core" }
 # ADR-0001。default-features は空で、server / client は各クレートが必要な
 # feature だけを有効にする（両方を core へ入れない）。
-# 0.19.0 未収録の品質変更通知修正（upstream #274）と採取時刻保持修正（fork PR #1）。
-# #17: 両修正を含む公開版が出たら crates.io に戻す。
-async-opcua = { git = "https://github.com/tyaro/async-opcua", rev = "60c4f9d72218d78177e59c70a03db7fddcf9d857", default-features = false }
+# 0.19.0 未収録の品質変更通知修正（upstream #274）、採取時刻保持修正（fork PR #1）、
+# 接続終了時のサービス中止（fork PR #2、ADR-0004）。
+# #17: これらを含む公開版が出たら crates.io に戻す。
+async-opcua = { git = "https://github.com/tyaro/async-opcua", rev = "9ee772bb994165520784528459b16c570c31990d", default-features = false }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
 # サンプル鍵の置き場。Phase 3 の証明書ディレクトリに置き換えるまでの足場。
