@@ -1,9 +1,14 @@
 # Changelog
 
 このファイルは [Keep a Changelog](https://keepachangelog.com/) の分類に近づける。
-バージョンは git タグで配る想定（banto ADR-0011）。crates.io は未公開。
+バージョンは git タグで配る（banto ADR-0011）。crates.io は未公開。
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-10-17
+
+最初のタグ。Phase 1 の固定タグ、Phase 2 の動的タグと品質・時刻の写像、
+ADR-0004 の書き込みハンドラーに通す Write を含む。
 
 ### 追加
 
@@ -49,3 +54,6 @@
 - `ServerConfig` は外部クレートで構造体リテラルを使えなくなった。`ServerConfig::default().with_port(...)` などへ移行する。
 - 自由関数 `endpoint_url` を公開 API から外した。`ServerConfig::endpoint_url` を使う。
 - `RunningServer::namespace_index()` を追加。`Error::TagUpdate` の表示文言をタグ操作全般に合わせた。
+
+[Unreleased]: https://github.com/tyaro/banto-opcua/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/tyaro/banto-opcua/releases/tag/v0.1.0
