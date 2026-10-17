@@ -25,6 +25,10 @@
 - ドットを含む接続・グループ・タグ名と、ルートと同名の接続 `Banto` を Browse と外部名 NodeId で扱えるようにした。
 - `ServerConfig::with_pki_dir`。自己署名の鍵と証明書を初回だけ作って再利用し、2 回目以降の起動を速くする（ADR-0003）。
 - 非有限値が購読でも値なし・Bad と採取時刻で届くことを確かめるテスト。
+- 利用者の書き込みハンドラーに通す Write（ADR-0004）。`OpcUaServer::start_with_write_handler`、`WriteHandler`、`RunningServer::set_tag_writable` と、core の `WriteRequest`・`WritePrincipal`・`WriteClient`・`WriteRejection`・`status_code_for_write_rejection`。ハンドラーを渡さないサーバーは読み取り専用のまま。
+- `ServerConfig::with_max_nodes_per_write`（既定 10）と `with_max_concurrent_writes`（既定 8）。上限を超えた Write は `BadTooManyOperations`、同時実行数の上限のノードは `BadResourceUnavailable`。
+- core の `StatusCode` に書き込み用の定数（`BAD_NOT_WRITABLE` など 8 つ）。
+- Python asyncua からの Write を相互接続テストに追加した。
 
 ### 修正
 
@@ -38,6 +42,7 @@
 
 ### 変更
 
+- タグの node manager を async-opcua の `SimpleNodeManager` から自前の実装に置き換えた。読み取りと購読の挙動は変わらない。
 - 最小 sampling interval を 0 ms とし、0 ms を要求した購読が実際に 0 ms で作成されるようにした。非ゼロで遅れた通知も採取時刻を保持する async-opcua の MPL-2.0 fork を固定した。
 - ドット入りの名前で NodeId が一致しても、登録時と異なるグループからの更新・削除を拒否する。
 - `ServerConfig` は外部クレートで構造体リテラルを使えなくなった。`ServerConfig::default().with_port(...)` などへ移行する。

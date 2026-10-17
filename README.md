@@ -2,8 +2,8 @@
 
 banto ファミリーの汎用 OPC UA ライブラリ。サーバーとクライアントの両方を
 置く。最初の利用者は [banto-hub の OPC UA サーバー](https://github.com/tyaro/banto-industrial/issues/201)
-（Browse、Read、Subscription / MonitoredItem、StatusCode と Timestamp の写像。
-Write は [ADR-0004](docs/adr/0004-write-through-host-handler.md) で設計し、実装中）。
+（Browse、Read、Subscription / MonitoredItem、StatusCode と Timestamp の写像、
+利用者の書き込みハンドラーに通す Write（[ADR-0004](docs/adr/0004-write-through-host-handler.md)））。
 
 SLMP を外部クレート [tyaro/slmp](https://github.com/tyaro/slmp) に分けたのと
 同じ考えで、OPC UA のプロトコル実装は本リポジトリに切り出す。ハブ本体へ
@@ -22,7 +22,7 @@ async-opcua を直接依存させない。
 
 ```
 crates/
-  banto-opcua-core/    共有語彙（値、StatusCode、時刻、ノード）。プロトコル非依存
+  banto-opcua-core/    共有語彙（値、StatusCode、時刻、ノード、書き込みの要求と拒否の理由）。プロトコル非依存
   banto-opcua-server/  サーバー。既定 bind は 127.0.0.1。Write は利用者のハンドラーに通す（ADR-0004）
   banto-opcua-client/  クライアントの足場。製品機能は別 issue
 ```
@@ -45,6 +45,19 @@ Read と 0 ms / 非ゼロの sampling interval の購読で、入力した Sourc
 `ServerConfig::with_pki_dir` を指定すると、自己署名の鍵と証明書を初回だけ作り、
 以降の起動で再利用する。未指定なら起動ごとに一時ディレクトリへ作る
 （[ADR-0003](docs/adr/0003-persistent-pki-dir.md)）。
+書き込みは `OpcUaServer::start_with_write_handler` で渡す `WriteHandler` を通してだけ
+受け付ける。`OpcUaServer::start` で起動したサーバーは読み取り専用のまま。
+タグは書き込み不可で登録され、`RunningServer::set_tag_writable` で書き込み可にした
+タグだけ AccessLevel に CurrentWrite が付く。サーバーは型・StatusCode・IndexRange・
+同時実行数を先に検査し、通ったノードだけを `WriteRequest`（外部名、値、主体、
+接続元の情報）としてハンドラーへ渡す。ハンドラーの `WriteRejection` は ADR-0004 の
+表どおりの StatusCode になる。Write ではノードの値を書き換えず、機器から戻った値は
+`update_tag_reading` で反映する。1 回の Write のノード数（既定 10）と同時に走る
+ハンドラーの数（既定 8）は `ServerConfig::with_max_nodes_per_write` /
+`with_max_concurrent_writes` で変えられる。ハンドラーを渡してループバック以外へ
+公開すると、Anonymous で書けるため警告ログを出す。Hub 側の結合は
+[banto-industrial #653](https://github.com/tyaro/banto-industrial/issues/653)。
+
 ハブ（banto-industrial）は [#627](https://github.com/tyaro/banto-industrial/pull/627) で
 タグレジストリと現在値をこの API へ接続し、管理 API から有効化できる。
 外部クライアントからの確認は [#632](https://github.com/tyaro/banto-industrial/pull/632)。
@@ -74,10 +87,10 @@ Phase 1 の試験用セキュリティは `None` / `None` / Anonymous。既定 b
 | 層 | いつ | 何を見るか |
 | --- | --- | --- |
 | 単体 | PR の CI（Linux と Windows） | core の写像。サーバーを起動しない |
-| プロセス内 | 同上 | ループバックで `ServerStatus/State` を読む。固定タグは Browse / Read / DataChange 通知と、サンプルタグが読み取り専用の AccessLevel であることを確認する。IPv6 が使える環境では `[::1]` でも標準ノードの疎通を見る |
+| プロセス内 | 同上 | ループバックで `ServerStatus/State` を読む。固定タグは Browse / Read / DataChange 通知と、サンプルタグが読み取り専用の AccessLevel であることを確認する。Write は拒否の StatusCode、遅いハンドラーの間も Read と購読が止まらないこと、ノード数と同時実行数の上限、CloseSession 後に残りのノードを書かないことを確認する（`tests/write.rs`）。IPv6 が使える環境では `[::1]` でも標準ノードの疎通を見る |
 | 接続失敗 | 接続処理を変更する PR・毎日・手動（Linux と Windows） | Discovery だけを通すプロキシでセッションを止め、時間切れとキャンセルで TCP 接続が閉じることを確認する。PR の必須 `ci-gate` には含めない |
-| 相互接続 | 別ワークフロー（`workflow_dispatch`、毎日、main への push、PR はパスで絞る） | Python asyncua → 本サーバーの GetEndpoints / Browse / Read / Subscription と、本クライアント → opc-plc のタグ Read。固定バージョンと実行方法は [`interop/README.md`](interop/README.md) |
-| 手動 | 開発者の手元 | 下記のサンプルサーバーを起動し、UaExpert から Browse / Read / Subscribe |
+| 相互接続 | 別ワークフロー（`workflow_dispatch`、毎日、main への push、PR はパスで絞る） | Python asyncua → 本サーバーの GetEndpoints / Browse / Read / Subscription / Write と、本クライアント → opc-plc のタグ Read。固定バージョンと実行方法は [`interop/README.md`](interop/README.md) |
+| 手動 | 開発者の手元 | 下記のサンプルサーバーを起動し、UaExpert から Browse / Read / Subscribe / Write |
 | 後続 | 認証試験が要るとき | OPC Foundation Compliance Test Tool（CTT） |
 
 プロセス内テストは外部プロセスもコンテナも要らない。相互接続は PR の
@@ -109,6 +122,29 @@ UaExpert で手動確認するときは `cargo run -p banto-opcua-server --examp
 接続する。`Objects/Banto/PLC1/Line1` を開き、2 つの変数を Data Access View
 へ追加する。サンプルサーバーの端末で Enter を押すたびに値が変わり、
 MonitoredItem に DataChange が届く。`q` で停止する。
+
+## 書き込みの手動確認（UaExpert）
+
+`cargo run -p banto-opcua-server --example interop_fixed_tags` を実行し、
+`ENDPOINT=` に表示されたエンドポイントへ SecurityPolicy `None`、Anonymous で接続する。
+このサンプルは書き込みハンドラー付きで起動し、`Objects/Banto/PLC2/Cell1` に書き込み可の
+タグを置く。
+
+| タグ | DataType | ハンドラーの動き |
+| --- | --- | --- |
+| `Setpoint` | Double | 受け付けて、端末に `WRITE <外部名> <値> anonymous <ApplicationUri>` の行を出す |
+| `Enable` | Boolean | `Setpoint` と同じ |
+| `Locked` | Double | `BadOutOfService` で拒否する |
+
+1. `Setpoint` を Data Access View へ追加し、Attributes で AccessLevel と
+   UserAccessLevel が CurrentRead, CurrentWrite であることを見る。
+2. Value に `12.5` を書く。UaExpert の Write は成功し、端末に `WRITE` 行が出る。
+   ノードの値は変わらない。
+3. 端末で `reflect` と入力する。最後の書き込みを機器から戻った値として反映し、
+   Data Access View の値が `12.5` になる。
+4. `Locked` への書き込みは `BadOutOfService`、`PLC1/Line1/Speed` への書き込みは
+   `BadNotWritable` になる。
+5. 空行か `quit` で停止する。
 
 ## 開発
 
