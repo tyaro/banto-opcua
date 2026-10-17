@@ -8,8 +8,6 @@ use opcua::{
     server::{
         ServerHandle,
         address_space::{ObjectBuilder, Variable},
-        diagnostics::NamespaceMetadata,
-        node_manager::memory::{SimpleNodeManager, simple_node_manager},
     },
     types::{
         AttributeId, ByteString, DataTypeId, DataValue, DateTime, Identifier, NodeId, ObjectId,
@@ -21,28 +19,26 @@ use banto_opcua_core::DataType;
 
 use opcua::server::address_space::NodeType;
 
-use crate::Error;
+use crate::{
+    Error,
+    tag_manager::{self, TagNodeManager, WriteSink},
+};
 
 const MANAGER_NAME: &str = "banto-fixed-tags";
 const ROOT_NAME: &str = "Banto";
 
-/// Phase 1 の固定ノードを扱う node manager を作る。
+/// 固定タグと動的タグを置く node manager を作る。`sink` が無ければ書き込めない。
 pub(crate) fn node_manager(
     namespace_uri: String,
+    sink: Option<Arc<dyn WriteSink>>,
 ) -> impl opcua::server::node_manager::NodeManagerBuilder {
-    simple_node_manager(
-        NamespaceMetadata {
-            namespace_uri,
-            ..Default::default()
-        },
-        MANAGER_NAME,
-    )
+    tag_manager::node_manager(namespace_uri, MANAGER_NAME, sink)
 }
 
 /// 固定タグのノード ID と値更新に必要なハンドル。
 pub(crate) struct FixedTags {
     pub namespace_index: u16,
-    pub(crate) manager: Arc<SimpleNodeManager>,
+    pub(crate) manager: Arc<TagNodeManager>,
 }
 
 struct InitialTagValue {
@@ -62,7 +58,7 @@ impl FixedTags {
             .ok_or_else(|| Error::Build("固定タグの名前空間が登録されていません".to_owned()))?;
         let manager = handle
             .node_managers()
-            .get_by_name::<SimpleNodeManager>(MANAGER_NAME)
+            .get_by_name::<TagNodeManager>(MANAGER_NAME)
             .ok_or_else(|| Error::Build("固定タグの node manager がありません".to_owned()))?;
         let banto = NodeId::new(namespace_index, ROOT_NAME);
         {

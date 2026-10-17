@@ -18,6 +18,7 @@ mod error;
 mod fixed_tags;
 mod reading;
 mod server;
+mod tag_manager;
 
 pub use config::ServerConfig;
 pub use error::Error;

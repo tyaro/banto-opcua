@@ -12,6 +12,8 @@ rust-version.workspace = true
 
 [dependencies]
 async-opcua = { workspace = true, features = ["server"] }
+# async-opcua の InMemoryNodeManagerImpl を実装するため（ADR-0004）。依存木には既にある。
+async-trait = "0.1"
 banto-opcua-core = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }

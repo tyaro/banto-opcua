@@ -154,6 +154,13 @@ Part 4 の使い分けに合わせるため。
 - 先に小さな試作で、読み取り・購読の既存テストを保ったまま async の Write と
   ユーザートークンを扱えるかを確かめる。だめなら、fork（tyaro/async-opcua）で
   コールバックに `RequestContext` を渡す修正を検討し、この ADR に追記する。
+- 試作の結果（2026-10-17、#25）: `SimpleNodeManager` を自前の実装に置き換えても、
+  読み取り・購読の既存テストはすべて通った。async の Write で書き込み先の応答を
+  待つ間も Read は待たされず、ユーザートークンから匿名かどうかを取れた。fork の
+  修正は要らない。`InMemoryNodeManagerImpl` は `async_trait` で定義されているので、
+  `async-trait` を直接の依存に足した（async-opcua の依存木に既にあり、許可する
+  ライセンスは変わらない）。名前空間の登録は `SimpleNodeManager` の builder と同じく
+  自前の builder で行う。
 
 ## 検討した代替案
 
