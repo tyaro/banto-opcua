@@ -18,8 +18,10 @@ PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read �
 動的タグの実データ向け登録・更新 API と、サンプルタグを外す設定を追加した（PR #20）。
 ハブとの接続と管理 API は banto-industrial #627、外部クライアントによる
 ハブの確認は banto-industrial #632 で実装した。Write は ADR-0004 で設計し、
-#25 で実装する。Windows Service と UaExpert の
-実機確認、Phase 3 のセキュリティは未実施。
+#25 の PR #27（node manager の置き換え）、PR #28（書き込みハンドラー）、
+PR #29（Python asyncua の相互接続）で実装した。Hub 側の結合は
+banto-industrial #653。Windows Service と UaExpert の実機確認（書き込みを含む）、
+Phase 3 のセキュリティは未実施。
 以下は依存関係に沿った作業順であり、各段階を独立した PR で検証する。
 
 | 段階 | 作業 | 完了条件 |
