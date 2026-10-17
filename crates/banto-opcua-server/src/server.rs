@@ -5,6 +5,7 @@
 use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
+    sync::Arc,
     time::SystemTime,
 };
 
@@ -22,6 +23,7 @@ use crate::{
         host_is_loopback, host_is_unspecified, normalize_endpoint_path, valid_advertised_host,
     },
     fixed_tags::{self, FixedTags},
+    tag_manager::WriteSink,
 };
 
 /// サーバーを起動する入口。状態は持たない。
@@ -40,7 +42,15 @@ impl OpcUaServer {
     ///
     /// `pki_dir` を作れないとき、証明書と秘密鍵の組を作れなかったとき、または
     /// Unix で残す秘密鍵の権限を絞れないときは [`Error::Pki`] を返す。
-    pub async fn start(mut config: ServerConfig) -> Result<RunningServer, Error> {
+    pub async fn start(config: ServerConfig) -> Result<RunningServer, Error> {
+        Self::start_with(config, None).await
+    }
+
+    /// 書き込み先を渡して起動する。#25 の本実装で公開のハンドラーに置き換える。
+    pub(crate) async fn start_with(
+        mut config: ServerConfig,
+        sink: Option<Arc<dyn WriteSink>>,
+    ) -> Result<RunningServer, Error> {
         if config.namespace_uri.trim().is_empty()
             || config.namespace_uri != config.namespace_uri.trim()
             || config.namespace_uri == "http://opcfoundation.org/UA/"
@@ -97,7 +107,7 @@ impl OpcUaServer {
                 ServerEndpoint::new_none(&path, &[ANONYMOUS_USER_TOKEN_ID.to_owned()]),
             )
             .discovery_urls(vec![endpoint.clone()])
-            .with_node_manager(fixed_tags::node_manager(namespace_uri.clone()));
+            .with_node_manager(fixed_tags::node_manager(namespace_uri.clone(), sink));
         // async-opcua の既定値 100 ms は 0 要求も補正する。厳密な採取時刻が
         // 必要なクライアントには、実際に 0 ms の監視項目を作れるようにする。
         builder.limits_mut().subscriptions.min_sampling_interval_ms = 0.0;
@@ -244,7 +254,7 @@ pub struct RunningServer {
     local_addr: SocketAddr,
     endpoint: String,
     handle: ServerHandle,
-    fixed_tags: FixedTags,
+    pub(crate) fixed_tags: FixedTags,
     task: Option<JoinHandle<Result<(), String>>>,
 }
 

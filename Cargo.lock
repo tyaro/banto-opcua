@@ -252,6 +252,7 @@ name = "banto-opcua-server"
 version = "0.1.0"
 dependencies = [
  "async-opcua",
+ "async-trait",
  "banto-opcua-client",
  "banto-opcua-core",
  "tempfile",
