@@ -2,8 +2,8 @@
 
 banto ファミリーの汎用 OPC UA ライブラリ。サーバーとクライアントの両方を
 置く。最初の利用者は [banto-hub の OPC UA サーバー](https://github.com/tyaro/banto-industrial/issues/201)
-（読み取り専用。Browse、Read、Subscription / MonitoredItem、StatusCode と
-Timestamp の写像）。
+（Browse、Read、Subscription / MonitoredItem、StatusCode と Timestamp の写像。
+Write は [ADR-0004](docs/adr/0004-write-through-host-handler.md) で設計し、実装中）。
 
 SLMP を外部クレート [tyaro/slmp](https://github.com/tyaro/slmp) に分けたのと
 同じ考えで、OPC UA のプロトコル実装は本リポジトリに切り出す。ハブ本体へ
@@ -23,7 +23,7 @@ async-opcua を直接依存させない。
 ```
 crates/
   banto-opcua-core/    共有語彙（値、StatusCode、時刻、ノード）。プロトコル非依存
-  banto-opcua-server/  サーバー。既定 bind は 127.0.0.1。初期スコープは読み取り専用
+  banto-opcua-server/  サーバー。既定 bind は 127.0.0.1。Write は利用者のハンドラーに通す（ADR-0004）
   banto-opcua-client/  クライアントの足場。製品機能は別 issue
 ```
 
@@ -34,7 +34,7 @@ Phase 1 の固定タグを既定で公開する。`Objects/Banto/PLC1/Line1` の
 `Running` を Browse / Read / Subscribe できる。`ServerConfig::with_sample_tags(false)`
 で試験用タグを外し、同じ外部名の実タグを登録できる。
 `RunningServer::add_tag_reading` / `update_tag_reading` は型・値・品質・時刻を
-`TagReading` で受け取り、読み取り専用の Read / Subscription へ反映する。
+`TagReading` で受け取り、Read / Subscription へ反映する。
 未取得でも DataType を保持し、SourceTimestamp が不明なら null のままにする。
 ドットを含む名前も Browse でき、Variable NodeId は外部名のまま保持する。
 Read と 0 ms / 非ゼロの sampling interval の購読で、入力した SourceTimestamp を
@@ -59,9 +59,10 @@ Issue 間の依存関係と実装順は [実装計画](docs/implementation-plan.
 | Phase 1 | サーバー起動、固定の名前空間、少数の変数、UaExpert から Browse / Read / Subscribe | 本リポジトリ、その後ハブへ接続 |
 | Phase 2 | タグレジストリ、アドレス空間、型・品質・時刻の写像、設定、管理 UI、Windows サービス | 主に banto-hub。写像の純関数は core |
 | Phase 3 | 証明書、SecurityPolicy、認証、トラスト、相互接続、ソーク | 本リポジトリとハブ |
-| 別 issue | OPC UA クライアント製品、Write、Method、Event、Historical Access | 未起票または別 issue |
+| Write | 利用者の書き込みハンドラーに通す Write（[ADR-0004](docs/adr/0004-write-through-host-handler.md)）。Hub 側は banto-industrial #653 | 本リポジトリとハブ |
+| 別 issue | OPC UA クライアント（Hub のドライバ）、Method、Event、Historical Access | 未起票または別 issue |
 
-#201 の初期スコープ外はクライアント製品、Write、Method、Event / Alarm、
+#201 の初期スコープ外はクライアント製品、Method、Event / Alarm、
 Historical Access、コンパニオン仕様、Discovery Server、細かい権限である。
 
 Phase 1 の試験用セキュリティは `None` / `None` / Anonymous。既定 bind は
@@ -73,7 +74,7 @@ Phase 1 の試験用セキュリティは `None` / `None` / Anonymous。既定 b
 | 層 | いつ | 何を見るか |
 | --- | --- | --- |
 | 単体 | PR の CI（Linux と Windows） | core の写像。サーバーを起動しない |
-| プロセス内 | 同上 | ループバックで `ServerStatus/State` を読む。固定タグは Browse / Read / DataChange 通知、読み取り専用の AccessLevel を確認する。IPv6 が使える環境では `[::1]` でも標準ノードの疎通を見る |
+| プロセス内 | 同上 | ループバックで `ServerStatus/State` を読む。固定タグは Browse / Read / DataChange 通知と、サンプルタグが読み取り専用の AccessLevel であることを確認する。IPv6 が使える環境では `[::1]` でも標準ノードの疎通を見る |
 | 接続失敗 | 接続処理を変更する PR・毎日・手動（Linux と Windows） | Discovery だけを通すプロキシでセッションを止め、時間切れとキャンセルで TCP 接続が閉じることを確認する。PR の必須 `ci-gate` には含めない |
 | 相互接続 | 別ワークフロー（`workflow_dispatch`、毎日、main への push、PR はパスで絞る） | Python asyncua → 本サーバーの GetEndpoints / Browse / Read / Subscription と、本クライアント → opc-plc のタグ Read。固定バージョンと実行方法は [`interop/README.md`](interop/README.md) |
 | 手動 | 開発者の手元 | 下記のサンプルサーバーを起動し、UaExpert から Browse / Read / Subscribe |

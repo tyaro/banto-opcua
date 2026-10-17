@@ -1,8 +1,8 @@
 # OPC UA 実装計画
 
-- 更新日: 2026-10-16
+- 更新日: 2026-10-17
 - 親課題: [banto-industrial #201](https://github.com/tyaro/banto-industrial/issues/201)
-- 対象: 本リポジトリの [#3〜#9](https://github.com/tyaro/banto-opcua/issues)
+- 対象: 本リポジトリの [#3〜#9](https://github.com/tyaro/banto-opcua/issues) と [#25](https://github.com/tyaro/banto-opcua/issues/25)
 
 ## 現在地と完了の単位
 
@@ -17,7 +17,8 @@ PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read �
 削除後の購読継続も本リポジトリで実装した。
 動的タグの実データ向け登録・更新 API と、サンプルタグを外す設定を追加した（PR #20）。
 ハブとの接続と管理 API は banto-industrial #627、外部クライアントによる
-ハブの確認は banto-industrial #632 で実装した。Windows Service と UaExpert の
+ハブの確認は banto-industrial #632 で実装した。Write は ADR-0004 で設計し、
+#25 で実装する。Windows Service と UaExpert の
 実機確認、Phase 3 のセキュリティは未実施。
 以下は依存関係に沿った作業順であり、各段階を独立した PR で検証する。
 
@@ -28,6 +29,7 @@ PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read �
 | 2. ハブの現在値 | [#6](https://github.com/tyaro/banto-opcua/issues/6) 値・品質の写像、[#8](https://github.com/tyaro/banto-opcua/issues/8) 時刻の写像、banto-industrial #201 のタグレジストリ接続 | Good / Bad / Stale、Boolean / Double、時刻不明の null を実データで確認する。設定、再起動、Windows Service、管理 UI は #201 で追跡する |
 | 3. 購読と動的ノード | [#7](https://github.com/tyaro/banto-opcua/issues/7) 品質だけの変更、[#5](https://github.com/tyaro/banto-opcua/issues/5) 削除と復帰 | 値が同じでも品質変更が通知される。削除通知後も MonitoredItem が残り、同じ NodeId の復帰で通知が再開する |
 | 4. 外部実装 | [#9](https://github.com/tyaro/banto-opcua/issues/9) Python asyncua と opc-plc | プレースホルダーを失敗可能な実テストに替える。バージョンを固定し、nightly と手動実行を緑にする |
+| 5. 書き込み | [#25](https://github.com/tyaro/banto-opcua/issues/25) 利用者の書き込みハンドラーに通す Write（[ADR-0004](adr/0004-write-through-host-handler.md)）。Hub 側は banto-industrial #653 | ハンドラーの結果が StatusCode の表どおりに返る。Write だけではノードの値が変わらない。Python asyncua からの Write が nightly で緑 |
 
 ## 依存関係と実装上の判断
 
