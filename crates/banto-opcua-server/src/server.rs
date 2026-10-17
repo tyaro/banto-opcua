@@ -5,15 +5,16 @@
 use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 use opcua::{
     server::{ANONYMOUS_USER_TOKEN_ID, ServerBuilder, ServerEndpoint, ServerHandle},
-    types::{DataValue, DateTime, Variant},
+    types::{DataValue, Variant},
 };
 use tokio::{net::TcpListener, task::JoinHandle};
 
-use banto_opcua_core::{DataType, MappedValue, Quality, map_current_value};
+use banto_opcua_core::{DataType, MappedValue, Quality, SampleTimestamps};
 
 use crate::{
     Error, ServerConfig, TagReading,
@@ -333,6 +334,11 @@ impl RunningServer {
 
     /// タグを削除し、既存の購読へ `BadNodeIdUnknown` を通知する。
     /// MonitoredItem は保持し、同じ NodeId の再登録で通知が再開する。
+    ///
+    /// 空になった接続・グループのフォルダーは消さず、Browse に残る。削除と
+    /// 再登録の間も、クライアントが控えたフォルダーの NodeId を無効にしないため。
+    /// 残るフォルダーの数は、このプロセスで使った接続と（接続, グループ）の組の
+    /// 数までで、アドレス空間はメモリ上にしかないので再起動すれば消える。
     pub fn remove_tag(&self, connection: &str, group: &str, tag: &str) -> Result<(), Error> {
         self.fixed_tags
             .remove_tag(&self.handle, connection, group, tag)
@@ -358,24 +364,15 @@ impl RunningServer {
         speed: Option<f64>,
         quality: Quality,
     ) -> Result<(), Error> {
-        let reading = map_current_value(DataType::Double, speed, quality);
-        let now = DateTime::now();
-        let value = DataValue {
-            // upstream の Variable::value は Value フィールド自体が None だと
-            // StatusCode も落とす。Null Variant で値なしを表して Bad を保つ。
-            // 回避策の見直しは #17 で追跡する。
-            value: Some(match reading.value {
-                Some(MappedValue::Boolean(bit)) => Variant::Boolean(bit),
-                Some(MappedValue::Double(number)) => Variant::Double(number),
-                None => Variant::Empty,
-            }),
-            status: Some(reading.status.code().into()),
-            source_timestamp: Some(now),
-            source_picoseconds: None,
-            server_timestamp: Some(now),
-            server_picoseconds: None,
-        };
-        self.fixed_tags.update(&self.handle, "Speed", value)
+        let now = SystemTime::now();
+        let reading = TagReading::new(
+            DataType::Double,
+            speed,
+            quality,
+            SampleTimestamps::new(Some(now), now),
+        );
+        self.fixed_tags
+            .update(&self.handle, "Speed", reading.data_value())
     }
 
     /// Phase 1 の固定タグ `PLC1.Line1.Running` を更新して購読者へ通知する。

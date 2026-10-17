@@ -162,9 +162,20 @@ async fn deleted_node_notifies_and_reappearing_node_resumes_the_same_subscriptio
         StatusCode::BadNodeIdUnknown
     );
     assert!(
-        !browse_names(&session, cell.clone())
+        browse_names(&session, cell.clone()).await.is_empty(),
+        "グループは空になる"
+    );
+    assert!(
+        browse_names(&session, NodeId::new(ns, "PLC2"))
             .await
-            .contains(&"Speed".to_owned())
+            .contains(&"Cell1".to_owned()),
+        "空になったグループのフォルダーは残す"
+    );
+    assert!(
+        browse_names(&session, NodeId::new(ns, "Banto"))
+            .await
+            .contains(&"PLC2".to_owned()),
+        "タグが無くなった接続のフォルダーも残す"
     );
 
     server
