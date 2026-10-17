@@ -31,6 +31,22 @@ impl StatusCode {
     pub const UNCERTAIN_LAST_USABLE_VALUE: Self = Self(0x4090_0000);
     /// `BadNodeIdUnknown`（0x80340000）。削除されたノードの購読へ返す候補。
     pub const BAD_NODE_ID_UNKNOWN: Self = Self(0x8034_0000);
+    /// `BadNotWritable`（0x803B0000）。書けないノード、または Value 以外の属性への Write。
+    pub const BAD_NOT_WRITABLE: Self = Self(0x803B_0000);
+    /// `BadUserAccessDenied`（0x801F0000）。主体に書き込みの権限が無い。
+    pub const BAD_USER_ACCESS_DENIED: Self = Self(0x801F_0000);
+    /// `BadTypeMismatch`（0x80740000）。書く値の型がノードと違う。
+    pub const BAD_TYPE_MISMATCH: Self = Self(0x8074_0000);
+    /// `BadOutOfRange`（0x803C0000）。書く値が範囲外。
+    pub const BAD_OUT_OF_RANGE: Self = Self(0x803C_0000);
+    /// `BadOutOfService`（0x808D0000）。書き込みを受け付けていない。
+    pub const BAD_OUT_OF_SERVICE: Self = Self(0x808D_0000);
+    /// `BadRequestNotAllowed`（0x80E40000）。書き込みの回数制限。
+    pub const BAD_REQUEST_NOT_ALLOWED: Self = Self(0x80E4_0000);
+    /// `BadCommunicationError`（0x80050000）。機器との通信に失敗した。
+    pub const BAD_COMMUNICATION_ERROR: Self = Self(0x8005_0000);
+    /// `BadInternalError`（0x80020000）。内部エラー。
+    pub const BAD_INTERNAL_ERROR: Self = Self(0x8002_0000);
 
     /// 32 ビットの生値を返す。
     pub const fn code(self) -> u32 {
@@ -65,6 +81,14 @@ impl std::fmt::Display for StatusCode {
             0x8000_0000 => "Bad",
             0x4090_0000 => "UncertainLastUsableValue",
             0x8034_0000 => "BadNodeIdUnknown",
+            0x803B_0000 => "BadNotWritable",
+            0x801F_0000 => "BadUserAccessDenied",
+            0x8074_0000 => "BadTypeMismatch",
+            0x803C_0000 => "BadOutOfRange",
+            0x808D_0000 => "BadOutOfService",
+            0x80E4_0000 => "BadRequestNotAllowed",
+            0x8005_0000 => "BadCommunicationError",
+            0x8002_0000 => "BadInternalError",
             _ => return write!(f, "StatusCode(0x{:08X})", self.0),
         };
         f.write_str(name)

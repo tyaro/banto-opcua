@@ -18,12 +18,12 @@ use tokio::{net::TcpListener, task::JoinHandle};
 use banto_opcua_core::{DataType, MappedValue, Quality, SampleTimestamps};
 
 use crate::{
-    Error, ServerConfig, TagReading,
+    Error, ServerConfig, TagReading, WriteHandler,
     config::{
         host_is_loopback, host_is_unspecified, normalize_endpoint_path, valid_advertised_host,
     },
     fixed_tags::{self, FixedTags},
-    tag_manager::WriteSink,
+    tag_manager::WritePath,
 };
 
 /// サーバーを起動する入口。状態は持たない。
@@ -42,14 +42,27 @@ impl OpcUaServer {
     ///
     /// `pki_dir` を作れないとき、証明書と秘密鍵の組を作れなかったとき、または
     /// Unix で残す秘密鍵の権限を絞れないときは [`Error::Pki`] を返す。
+    ///
+    /// 書き込みハンドラーを渡さないので、すべてのタグは読み取り専用になる。
     pub async fn start(config: ServerConfig) -> Result<RunningServer, Error> {
         Self::start_with(config, None).await
     }
 
-    /// 書き込み先を渡して起動する。#25 の本実装で公開のハンドラーに置き換える。
-    pub(crate) async fn start_with(
+    /// 書き込みハンドラーを渡して起動する（ADR-0004）。
+    ///
+    /// [`RunningServer::set_tag_writable`] で書き込み可にしたタグへの Write を、
+    /// サーバーの検査を通したうえで `handler` へ渡す。Anonymous で書けるので、
+    /// ループバック以外へ公開するときは警告ログを出す。ほかは [`Self::start`] と同じ。
+    pub async fn start_with_write_handler(
+        config: ServerConfig,
+        handler: Arc<dyn WriteHandler>,
+    ) -> Result<RunningServer, Error> {
+        Self::start_with(config, Some(handler)).await
+    }
+
+    async fn start_with(
         mut config: ServerConfig,
-        sink: Option<Arc<dyn WriteSink>>,
+        handler: Option<Arc<dyn WriteHandler>>,
     ) -> Result<RunningServer, Error> {
         if config.namespace_uri.trim().is_empty()
             || config.namespace_uri != config.namespace_uri.trim()
@@ -88,6 +101,13 @@ impl OpcUaServer {
                 advertised_host = %endpoint_host,
                 "OPC UA サーバーをループバック以外へ公開します。Phase 1 は SecurityPolicy None / Anonymous です"
             );
+            if handler.is_some() {
+                tracing::warn!(
+                    bind = %config.bind,
+                    advertised_host = %endpoint_host,
+                    "OPC UA の書き込みを受け付けます。同じネットワークから Anonymous で書けます"
+                );
+            }
         }
 
         let namespace_uri = config.namespace_uri.clone();
@@ -107,10 +127,14 @@ impl OpcUaServer {
                 ServerEndpoint::new_none(&path, &[ANONYMOUS_USER_TOKEN_ID.to_owned()]),
             )
             .discovery_urls(vec![endpoint.clone()])
-            .with_node_manager(fixed_tags::node_manager(namespace_uri.clone(), sink));
+            .with_node_manager(fixed_tags::node_manager(
+                namespace_uri.clone(),
+                handler.map(|handler| WritePath::new(handler, config.max_concurrent_writes)),
+            ));
         // async-opcua の既定値 100 ms は 0 要求も補正する。厳密な採取時刻が
         // 必要なクライアントには、実際に 0 ms の監視項目を作れるようにする。
         builder.limits_mut().subscriptions.min_sampling_interval_ms = 0.0;
+        builder.limits_mut().operational.max_nodes_per_write = config.max_nodes_per_write.get();
         let (server, handle) = builder.build().map_err(Error::Build)?;
         pki.finish()?;
         let fixed_tags = FixedTags::register(&handle, &namespace_uri, config.sample_tags)?;
@@ -254,7 +278,7 @@ pub struct RunningServer {
     local_addr: SocketAddr,
     endpoint: String,
     handle: ServerHandle,
-    pub(crate) fixed_tags: FixedTags,
+    fixed_tags: FixedTags,
     task: Option<JoinHandle<Result<(), String>>>,
 }
 
@@ -279,7 +303,7 @@ impl RunningServer {
         self.namespace_index()
     }
 
-    /// `{connection}.{group}.{tag}` の読み取り専用タグを追加する。
+    /// `{connection}.{group}.{tag}` のタグを追加する。書き込み不可で登録する。
     /// 同じ NodeId が既にあればエラー。接続・グループのフォルダーは必要なら作る。
     /// 各名前は空文字にできない。ドットと接続名 `Banto` は使用できる。
     /// 初期値には登録時刻を付ける試験用 API。
@@ -304,7 +328,7 @@ impl RunningServer {
             .add_tag(&self.handle, connection, group, tag, value)
     }
 
-    /// 実データの型・品質・時刻を保持したまま、読み取り専用タグを登録する。
+    /// 実データの型・品質・時刻を保持したまま、タグを書き込み不可で登録する。
     /// 値が未取得でも DataType は `reading.data_type` で確定する。
     pub fn add_tag_reading(
         &self,
@@ -340,6 +364,23 @@ impl RunningServer {
             reading.data_type,
             reading.data_value(),
         )
+    }
+
+    /// 登録済みのタグを書き込み可・不可に切り替える（ADR-0004）。
+    ///
+    /// 書き込み可のタグだけ、AccessLevel と UserAccessLevel に CurrentWrite を
+    /// 付ける。書き込みハンドラーなしで起動したサーバーでは、`writable` でも
+    /// 書き込み不可のままにする。サンプルタグは切り替えられない。削除して
+    /// 再登録したタグは、書き込み不可から始まる。
+    pub fn set_tag_writable(
+        &self,
+        connection: &str,
+        group: &str,
+        tag: &str,
+        writable: bool,
+    ) -> Result<(), Error> {
+        self.fixed_tags
+            .set_tag_writable(connection, group, tag, writable)
     }
 
     /// タグを削除し、既存の購読へ `BadNodeIdUnknown` を通知する。

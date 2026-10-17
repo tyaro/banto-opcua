@@ -7,7 +7,7 @@ use std::sync::Arc;
 use opcua::{
     server::{
         ServerHandle,
-        address_space::{ObjectBuilder, Variable},
+        address_space::{AccessLevel, ObjectBuilder, Variable},
     },
     types::{
         AttributeId, ByteString, DataTypeId, DataValue, DateTime, Identifier, NodeId, ObjectId,
@@ -21,18 +21,18 @@ use opcua::server::address_space::NodeType;
 
 use crate::{
     Error,
-    tag_manager::{self, TagNodeManager, WriteSink},
+    tag_manager::{self, TagName, TagNodeManager, WritePath},
 };
 
 const MANAGER_NAME: &str = "banto-fixed-tags";
 const ROOT_NAME: &str = "Banto";
 
-/// 固定タグと動的タグを置く node manager を作る。`sink` が無ければ書き込めない。
+/// 固定タグと動的タグを置く node manager を作る。`write` が無ければ書き込めない。
 pub(crate) fn node_manager(
     namespace_uri: String,
-    sink: Option<Arc<dyn WriteSink>>,
+    write: Option<WritePath>,
 ) -> impl opcua::server::node_manager::NodeManagerBuilder {
-    tag_manager::node_manager(namespace_uri, MANAGER_NAME, sink)
+    tag_manager::node_manager(namespace_uri, MANAGER_NAME, write)
 }
 
 /// 固定タグのノード ID と値更新に必要なハンドル。
@@ -233,6 +233,14 @@ impl FixedTags {
             &VariableTypeId::BaseDataVariableType.into(),
             ReferenceTypeId::HasTypeDefinition,
         );
+        self.manager.inner().tags().write().insert(
+            tag_id.clone(),
+            TagName {
+                connection: connection.to_owned(),
+                group: group.to_owned(),
+                tag: tag.to_owned(),
+            },
+        );
         after_insert();
         // 初期値の保存と通知まで write ロックで排他し、削除・再登録との逆転を防ぐ。
         // 通常の値更新と同じ sampler で監視項目ごとにノードを読み直す。
@@ -330,6 +338,41 @@ impl FixedTags {
             .into_iter(),
         );
         space.delete(&id, true);
+        self.manager.inner().tags().write().remove(&id);
+        Ok(())
+    }
+
+    /// 動的タグの AccessLevel と UserAccessLevel を切り替える。書き込みハンドラーが
+    /// 無いサーバーでは、`writable` でも CurrentRead のままにする。
+    pub fn set_tag_writable(
+        &self,
+        connection: &str,
+        group: &str,
+        tag: &str,
+        writable: bool,
+    ) -> Result<(), Error> {
+        validate_path(connection, group, tag)?;
+        let id = NodeId::new(self.namespace_index, format!("{connection}.{group}.{tag}"));
+        let group_id = folder_id(self.namespace_index, &[connection, group]);
+        let mut space = self.manager.address_space().write();
+        // サンプルタグは外部名を持たないので、書き込み可にできない。
+        if !space.has_reference(&group_id, &id, ReferenceTypeId::HasComponent)
+            || !self.manager.inner().tags().read().contains_key(&id)
+        {
+            return Err(Error::TagUpdate(format!(
+                "タグ {id} は指定されたグループにありません"
+            )));
+        }
+        let Some(NodeType::Variable(variable)) = space.find_mut(&id) else {
+            return Err(Error::TagUpdate(format!("タグ {id} が見つかりません")));
+        };
+        let level = if writable && self.manager.inner().accepts_writes() {
+            AccessLevel::CURRENT_READ | AccessLevel::CURRENT_WRITE
+        } else {
+            AccessLevel::CURRENT_READ
+        };
+        variable.set_access_level(level);
+        variable.set_user_access_level(level);
         Ok(())
     }
 }

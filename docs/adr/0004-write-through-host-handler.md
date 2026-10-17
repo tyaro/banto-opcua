@@ -116,6 +116,7 @@ Hub には、REST・gRPC・MCP が共通で呼ぶ書き込み関数（`execute_w
 | ハンドラーが無い、または AccessLevel に CurrentWrite が無い | `BadNotWritable` |
 | Value 以外の属性 | `BadNotWritable` |
 | 値の型がノードの DataType と違う | `BadTypeMismatch` |
+| Double が非有限値（NaN、±∞） | `BadOutOfRange` |
 | StatusCode が Bad / Uncertain | `BadWriteNotSupported` |
 | IndexRange 付き | `BadIndexRangeNoData` |
 | 同時に走るハンドラーの数が上限 | `BadResourceUnavailable` |
@@ -154,6 +155,24 @@ Part 4 の使い分けに合わせるため。
 - 先に小さな試作で、読み取り・購読の既存テストを保ったまま async の Write と
   ユーザートークンを扱えるかを確かめる。だめなら、fork（tyaro/async-opcua）で
   コールバックに `RequestContext` を渡す修正を検討し、この ADR に追記する。
+- 実装（2026-10-17、#25）: 上限の既定値は、1 回の Write のノード数を 10、
+  同時に走るハンドラーの数を 8 にした（`ServerConfig` の `max_nodes_per_write`・
+  `max_concurrent_writes`）。UaExpert などの手動の書き込みは 1 ノードで、Hub の
+  書き込みは機器ごとに順に進むので、同時に 8 件を超えて待つ使い方は想定しない。
+  ノード数の上限は async-opcua の `max_nodes_per_write` に渡し、超えた要求は
+  サービス全体の `BadTooManyOperations` になる（Part 4 のとおり）。公開する
+  Double は有限値に限るので、非有限値の Write はハンドラーを呼ばずに
+  `BadOutOfRange` にする。書き込み可否は `RunningServer::set_tag_writable` で
+  切り替え、登録したばかりのタグと再登録したタグは書き込み不可から始まる。
+- 切断の扱い（2026-10-17、#25 で確認）: async-opcua はサービスの呼び出しを
+  `tokio::spawn` で走らせ、要求の時間切れでだけ中止する。接続が切れても
+  サービスは捨てられない。そこで、ノードごとにセッションがまだ有効かを確かめ、
+  CloseSession の後は残りのノードを始めない（`BadSessionClosed`）。時間切れで
+  中止されたときは、残りのノードは始まらない。CloseSession を送らずに TCP が
+  切れたときは、async-opcua からそれを知る手段がなく、残りのノードも書く。
+  書かれるのは 1 要求あたり `max_nodes_per_write` 件までで、同時実行数の上限も
+  かかる。これも防ぐには、fork で接続の終了時にサービスのタスクを中止する
+  必要がある。
 - 試作の結果（2026-10-17、#25）: `SimpleNodeManager` を自前の実装に置き換えても、
   読み取り・購読の既存テストはすべて通った。async の Write で書き込み先の応答を
   待つ間も Read は待たされず、ユーザートークンから匿名かどうかを取れた。fork の
