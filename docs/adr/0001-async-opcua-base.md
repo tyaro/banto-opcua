@@ -36,9 +36,11 @@ ADR-0002 は「依存を足さない」を既定にしつつ、自前実装が�
 このコミットは fork の保全用タグ `banto-source-timestamp-20261016` でも保持する。
 2026-10-17、接続が切れたときに走っているサービスの呼び出しを中止する
 [fork PR #2](https://github.com/tyaro/async-opcua/pull/2) を上に重ね、
-`9ee772bb994165520784528459b16c570c31990d` に固定を移した（理由は ADR-0004）。このコミットは PR の参照 `refs/pull/2/head` でも保持される。
+`9ee772bb994165520784528459b16c570c31990d` に固定を移した（理由は ADR-0004）。このコミットは fork の保全用ブランチ
+`keep/banto-abort-on-close-20261017` でも保持する（このセッションの環境からはタグを
+push できなかったため、PR のブランチとは別のブランチに置く）。
 sampling interval が -1 のときは実際の購読周期まで最新値だけを保留する。
-両修正を含む公開版が出たら crates.io 依存へ戻す（[#17](https://github.com/tyaro/banto-opcua/issues/17)）。
+これらの修正を含む公開版が出たら crates.io 依存へ戻す（[#17](https://github.com/tyaro/banto-opcua/issues/17)）。
 基点の upstream コミットには 0.19.0 以降の別の変更も含まれるため、依存更新時は
 回帰テストと cargo-deny を実行する。
 

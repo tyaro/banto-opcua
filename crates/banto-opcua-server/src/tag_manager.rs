@@ -128,7 +128,8 @@ impl InMemoryNodeManagerImpl for TagNodeManagerImpl {
         };
         let client = write_client(context);
         for node in nodes_to_write.iter_mut() {
-            // async-opcua は切断で要求を捨てないので、CloseSession の後は残りを始めない。
+            // CloseSession の後は残りを始めない。TCP だけが切れたときは、fork が
+            // サービスの呼び出しごと中止する（ADR-0004）。
             if !context.session.read().is_activated() {
                 node.set_status(StatusCode::BadSessionClosed);
                 continue;
