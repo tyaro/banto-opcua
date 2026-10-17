@@ -9,7 +9,8 @@
 | Python asyncua → banto-opcua-server | Python 3.12、`asyncua==1.1.8` と `requirements.txt` の依存 | GetEndpoints、固定タグの Browse・Read・Subscription、更新後の値と Good 品質。書き込み可のタグの AccessLevel、SourceTimestamp 付きの Write（Double・Boolean）がハンドラーへ届き、Write だけでは値が変わらないこと、`BadNotWritable`・`BadTypeMismatch`・`BadOutOfService` の拒否（ADR-0004） |
 | banto-opcua-client → opc-plc | `mcr.microsoft.com/iotedge/opc-plc:2.9.9-linux-amd64`（digest `sha256:3d16f104393869540403390e617a2d6afe98b3b0673fb9d8ff1533f35b6726cf`） | `ServerStatus/State` が Running、`ns=3;s=FastUInt1` が UInt32 として読める |
 
-ローカルで Python 経路を動かす（起動待ちに `select.select` を使うため Linux / macOS 対象）:
+ローカルで Python 経路を動かす（起動待ちに `select.select` を使うため Linux / macOS 対象。
+`asyncio.wait_for` の時間切れを `TimeoutError` で捕まえるので Python 3.11 以降）:
 
 ```sh
 cargo build --locked -p banto-opcua-server --example interop_fixed_tags

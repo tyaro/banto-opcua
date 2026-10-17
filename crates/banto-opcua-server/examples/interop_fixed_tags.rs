@@ -41,12 +41,14 @@ impl WriteHandler for Recorder {
                 WritePrincipal::Anonymous => "anonymous",
                 _ => "other",
             };
-            println!(
+            let line = format!(
                 "WRITE {}.{}.{} {value} {principal} {}",
                 request.connection, request.group, request.tag, request.client.application_uri
             );
-            io::stdout().flush().map_err(|_| WriteRejection::Internal)?;
+            // 記録してから出力する。WRITE を読んだ直後の reflect でも記録が済んでいる。
             *last.lock().map_err(|_| WriteRejection::Internal)? = Some(request);
+            println!("{line}");
+            io::stdout().flush().map_err(|_| WriteRejection::Internal)?;
             Ok(())
         })
     }
