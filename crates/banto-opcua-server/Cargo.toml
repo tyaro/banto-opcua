@@ -1,8 +1,8 @@
-# 読み取り専用 OPC UA サーバー。Phase 1 は固定タグの Browse / Read /
-# Subscription まで。ハブのタグレジストリは Phase 2 で接続する。
+# OPC UA サーバー。タグの Browse / Read / Subscription と、利用者の書き込み
+# ハンドラーに通す Write（ADR-0004）。ハンドラーを渡さなければ読み取り専用。
 [package]
 name = "banto-opcua-server"
-description = "banto OPC UA サーバー。既定の待受は 127.0.0.1、初期スコープは読み取り専用"
+description = "banto OPC UA サーバー。既定の待受は 127.0.0.1、書き込みは利用者のハンドラーを通す"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,7 +17,7 @@ async-trait = "0.1"
 banto-opcua-core = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 
 [dev-dependencies]

@@ -1,9 +1,10 @@
-//! サーバーの待受設定。SecurityPolicy と認証の項目は Phase 3 まで置かない。
+//! サーバーの待受設定と書き込みの上限。SecurityPolicy と認証の項目は Phase 3 まで置かない。
 //! 例外として、自己署名の鍵と証明書の保存先だけを [`ServerConfig::pki_dir`] に
 //! 置く（[ADR-0003](https://github.com/tyaro/banto-opcua/blob/main/docs/adr/0003-persistent-pki-dir.md)）。
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    num::NonZeroUsize,
     path::PathBuf,
 };
 
@@ -55,7 +56,21 @@ pub struct ServerConfig {
     /// 呼び出し側のデータディレクトリに従う。同時に起動する複数のサーバーで
     /// 同じディレクトリを共有しない（初回の生成が競合する）。
     pub pki_dir: Option<PathBuf>,
+    /// 1 回の Write で受け付けるノード数の上限。既定は 10。
+    ///
+    /// 超えた要求は、サービス全体の結果 `BadTooManyOperations` で拒否する。
+    /// ノードは 1 件ずつ機器の応答を待つので、大きくすると 1 要求で長く
+    /// 占有できる（ADR-0004）。書き込みハンドラーが無いときも同じ上限を使う。
+    pub max_nodes_per_write: NonZeroUsize,
+    /// サーバー全体で同時に走る書き込みハンドラーの数の上限。既定は 8。
+    ///
+    /// 上限に達しているノードは、ハンドラーを呼ばずに `BadResourceUnavailable`
+    /// にする。待ち行列にはしない（ADR-0004）。
+    pub max_concurrent_writes: NonZeroUsize,
 }
+
+const DEFAULT_MAX_NODES_PER_WRITE: NonZeroUsize = NonZeroUsize::new(10).unwrap();
+const DEFAULT_MAX_CONCURRENT_WRITES: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -70,6 +85,8 @@ impl Default for ServerConfig {
             sample_tags: true,
             advertised_host: None,
             pki_dir: None,
+            max_nodes_per_write: DEFAULT_MAX_NODES_PER_WRITE,
+            max_concurrent_writes: DEFAULT_MAX_CONCURRENT_WRITES,
         }
     }
 }
@@ -133,6 +150,18 @@ impl ServerConfig {
     /// 自己署名の鍵と証明書を再利用するディレクトリを設定する。
     pub fn with_pki_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.pki_dir = Some(dir.into());
+        self
+    }
+
+    /// 1 回の Write で受け付けるノード数の上限を設定する。
+    pub fn with_max_nodes_per_write(mut self, max: NonZeroUsize) -> Self {
+        self.max_nodes_per_write = max;
+        self
+    }
+
+    /// 同時に走る書き込みハンドラーの数の上限を設定する。
+    pub fn with_max_concurrent_writes(mut self, max: NonZeroUsize) -> Self {
+        self.max_concurrent_writes = max;
         self
     }
 
