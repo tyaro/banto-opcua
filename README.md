@@ -166,7 +166,7 @@ cargo deny --all-features check
 
 ## 配布
 
-banto の ADR-0011 に合わせ、配布は git タグを予定する。crates.io への公開は
+banto の ADR-0011 に合わせ、git タグで配布する（最初のタグは `v0.1.0`）。crates.io への公開は
 未決のため `publish = false`。消費側は `Cargo.lock` の再現性を保つため、
 タグを固定して依存する（banto-industrial の `slmp` と同じ）。
 
