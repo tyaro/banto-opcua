@@ -16,11 +16,13 @@ rustfmt / clippy に委ねる。
 行う。そのときは警告ログを出す。Phase 1 のセキュリティは `None` / Anonymous
 なので、ループバック以外は平文かつ匿名の公開になる。
 
-## 2. 初期スコープは読み取り専用
+## 2. 書き込みは利用者の書き込み経路を通す
 
-変数のアクセスレベルは CurrentRead のみ。OPC UA の Write から PLC へ
-書く経路は別 issue。このリポジトリに書き込みの入口を足すときは、
-banto-hub の認可と監査を経由する設計を先に ADR にする。
+OPC UA の Write は、利用者が渡す書き込みハンドラーを通してだけ受け付ける。
+サーバーが自分でノードの値を書き換えたり、PLC へ書いたりしない。ハンドラーが
+無いときと、書けないタグの AccessLevel は CurrentRead のみ。認可と監査は
+ハンドラーの側（banto-hub の書き込み経路）で行う。設計は
+[ADR-0004](adr/0004-write-through-host-handler.md)。
 
 ## 3. core はプロトコル実装を知らない
 
