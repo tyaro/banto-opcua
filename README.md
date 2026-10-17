@@ -24,7 +24,7 @@ async-opcua を直接依存させない。
 crates/
   banto-opcua-core/    共有語彙（値、StatusCode、時刻、ノード、書き込みの要求と拒否の理由）。プロトコル非依存
   banto-opcua-server/  サーバー。既定 bind は 127.0.0.1。Write は利用者のハンドラーに通す（ADR-0004）
-  banto-opcua-client/  クライアントの足場。製品機能は別 issue
+  banto-opcua-client/  クライアント。Hub のドライバ向けの Read / Write の部品（ADR-0005、#33 で実装中）
 ```
 
 `banto-opcua-core` は async-opcua に依存しない。サーバーとクライアントが
@@ -73,7 +73,8 @@ Issue 間の依存関係と実装順は [実装計画](docs/implementation-plan.
 | Phase 2 | タグレジストリ、アドレス空間、型・品質・時刻の写像、設定、管理 UI、Windows サービス | 主に banto-hub。写像の純関数は core |
 | Phase 3 | 証明書、SecurityPolicy、認証、トラスト、相互接続、ソーク | 本リポジトリとハブ |
 | Write | 利用者の書き込みハンドラーに通す Write（[ADR-0004](docs/adr/0004-write-through-host-handler.md)）。Hub 側は banto-industrial #653 | 本リポジトリとハブ |
-| 別 issue | OPC UA クライアント（Hub のドライバ）、Method、Event、Historical Access | 未起票または別 issue |
+| クライアント | Hub のドライバ向けの Read / Write の部品（[ADR-0005](docs/adr/0005-client-as-hub-driver.md)、[#33](https://github.com/tyaro/banto-opcua/issues/33)）。ドライバ本体は banto-industrial #678 | 本リポジトリとハブ |
+| 別 issue | Method、Event、Historical Access、クライアントの購読と Browse | 未起票または別 issue |
 
 #201 の初期スコープ外はクライアント製品、Method、Event / Alarm、
 Historical Access、コンパニオン仕様、Discovery Server、細かい権限である。
@@ -186,7 +187,7 @@ banto の ADR-0011 に合わせ、git タグで配布する（最初のタグは
 6. **LAN 公開。** 条件付きで許可する。`advertised_host` を用意し、未指定アドレス（`0.0.0.0` / `::`）でそれが未設定なら起動はエラーになる。ループバック以外は明示したときだけ公開し、そのときは警告ログを出す。既定の bind は `127.0.0.1`。
 7. **edition。** 2024 のまま。
 
-クライアント製品のスコープは未起票の別 issue（ロードマップの「別 issue」）。
+クライアントは [ADR-0005](docs/adr/0005-client-as-hub-driver.md) で Hub のドライバ向けの部品として作る（[#33](https://github.com/tyaro/banto-opcua/issues/33)）。
 
 ## Phase 2 の検討事項
 

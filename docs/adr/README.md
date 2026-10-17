@@ -31,3 +31,4 @@
 | [0002](0002-dynamic-reading-boundary.md) | 動的タグの現在値をプロトコル非依存の入力で渡す | Accepted |
 | [0003](0003-persistent-pki-dir.md) | 自己署名の鍵と証明書の保存先だけを Phase 3 より前に設定可能にする | Accepted |
 | [0004](0004-write-through-host-handler.md) | OPC UA の Write を利用者が渡す書き込みハンドラーに通す | Accepted |
+| [0005](0005-client-as-hub-driver.md) | OPC UA クライアントを Hub のドライバ向けの部品として作る | Accepted |
