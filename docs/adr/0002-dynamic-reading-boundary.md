@@ -45,4 +45,4 @@ Phase 1 のサンプルタグは既定で残し、ハブは `with_sample_tags(fa
 保持する。基盤の async-opcua は以前、非ゼロの sampling interval で遅延した
 通知の SourceTimestamp を次のサンプル時刻へ置き換えていた。この修正は
 [MPL-2.0 の fork](https://github.com/tyaro/async-opcua/pull/1) に分離し、
-`60c4f9d72218d78177e59c70a03db7fddcf9d857` に固定する。
+`60c4f9d72218d78177e59c70a03db7fddcf9d857` に固定した（その後の固定の更新は ADR-0001）。
