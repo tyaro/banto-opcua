@@ -202,6 +202,9 @@ struct ServerInfo {
     max_nodes_per_read: AtomicUsize,
     /// 1 回の Write に入れるノード数。`BadTooManyOperations` で小さくする。
     max_nodes_per_write: AtomicUsize,
+    /// `namespace_array` を読んだセッションの認証トークン。Write はこのトークンで送り、
+    /// 別のセッション（名前空間の番号が違うかもしれない）では適用させない。
+    auth_token: UaNodeId,
 }
 
 impl ServerInfo {
@@ -216,6 +219,8 @@ impl ServerInfo {
             VariableId::Server_ServerCapabilities_OperationLimits_MaxNodesPerWrite,
         ]
         .map(|id| ReadValueId::from(UaNodeId::from(id)));
+        // Read の前後で認証トークンが同じなら、NamespaceArray はそのセッションで読んだもの。
+        let auth_token = current_auth_token(session);
         // 上限を知る前の Read なので、MaxNodesPerRead が 1 のサーバーにも分けて送る。
         let mut chunk_size = nodes.len();
         let values = send_in_chunks(
@@ -234,6 +239,9 @@ impl ServerInfo {
         let [namespace_array, max_nodes_per_read, max_nodes_per_write] =
             <[DataValue; 3]>::try_from(values)
                 .map_err(|_| "サーバーの情報の応答の数が要求と合いません".to_owned())?;
+        if current_auth_token(session) != auth_token {
+            return Err("サーバーの情報を読んでいる間にセッションが変わりました".to_owned());
+        }
         Ok(Self {
             generation,
             namespace_array: namespace_array_from(namespace_array),
@@ -243,8 +251,17 @@ impl ServerInfo {
             max_nodes_per_write: AtomicUsize::new(
                 limit_from(max_nodes_per_write).unwrap_or(config.default_max_nodes_per_write.get()),
             ),
+            auth_token,
         })
     }
+}
+
+/// いまのセッションの認証トークン。要求のヘッダーと同じ所から取る。
+fn current_auth_token(session: &Session) -> UaNodeId {
+    services::Write::new(session)
+        .header()
+        .authentication_token
+        .clone()
 }
 
 /// サービス全体の拒否のうち、塊を小さくすれば通るもの。
@@ -504,6 +521,7 @@ impl ConnectedClient {
         }
 
         let generation = info.generation;
+        let auth_token = &info.auth_token;
         let mut chunk_size = info.max_nodes_per_write.load(Ordering::Relaxed);
         let result = send_in_chunks(
             &requests,
@@ -514,8 +532,13 @@ impl ConnectedClient {
                     return Err(ChunkWriteFailure::NotSent);
                 }
                 let chunk_len = chunk.len();
+                // NamespaceArray を読んだセッションのトークンで送る。張り直しと重なって
+                // 新しい接続へ届いても、そのセッションのトークンではないので適用されない
+                // （BadSessionIdInvalid）。
+                let mut request_header = services::Write::new(&self.session).header().clone();
+                request_header.authentication_token = auth_token.clone();
                 let request = WriteRequest {
-                    request_header: services::Write::new(&self.session).header().clone(),
+                    request_header,
                     nodes_to_write: Some(chunk),
                 };
                 let response = self
