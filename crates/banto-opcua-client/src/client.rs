@@ -673,6 +673,12 @@ impl ConnectedClient {
     pub async fn monitor(&self, nodes: &[NodeAddress]) -> Result<Vec<StatusCode>, Error> {
         let info = self.server_info().await?;
         let mut monitored = self.monitored.lock().await;
+        if let Some(previous) = monitored.as_mut()
+            && previous.generation != info.generation
+        {
+            // 張り直した後は、新しい購読が古い購読と同じ ID になりうる（latest と同じ）。
+            self.forget_subscription(previous).await;
+        }
         let (subscription_id, statuses) = match self.subscribe(&info, nodes, None).await {
             Ok(created) => created,
             Err(error) => {
@@ -684,11 +690,8 @@ impl ConnectedClient {
                 return Err(error);
             }
         };
-        if let Some(previous) = monitored.take() {
-            let _ = self
-                .session
-                .delete_subscription(previous.subscription_id)
-                .await;
+        if let Some(mut previous) = monitored.take() {
+            self.forget_subscription(&mut previous).await;
         }
         *monitored = Some(Monitored {
             addresses: nodes.to_vec(),
@@ -738,12 +741,17 @@ impl ConnectedClient {
                 .then(|| self.table.lock().map(|table| table.readings()))
                 .transpose()
                 .map_err(poisoned)?;
+            if reconnected {
+                // 張り直した先のサーバーは、購読の ID を 1 から振り直すことがある。新しい
+                // 購読が古い購読と同じ ID になりうるので、古い購読のクライアントの状態を
+                // 先に消す（サーバーには無いので Bad が返る）。
+                self.forget_subscription(current).await;
+            }
             match self.subscribe(&info, &current.addresses, carried).await {
                 Ok((subscription_id, _)) => {
-                    let _ = self
-                        .session
-                        .delete_subscription(current.subscription_id)
-                        .await;
+                    // 同じ接続の中では ID は重ならないので、新しい購読ができてから消す
+                    // （あいだに購読が無くなって BadNoSubscription にならないように）。
+                    self.forget_subscription(current).await;
                     current.subscription_id = subscription_id;
                     current.generation = info.generation;
                 }
@@ -759,6 +767,17 @@ impl ConnectedClient {
             }
         }
         Ok(self.table.lock().map_err(poisoned)?.readings())
+    }
+
+    /// 登録の購読を消し、ID を忘れる。もう消してあれば何もしない。
+    async fn forget_subscription(&self, monitored: &mut Monitored) {
+        if monitored.subscription_id != 0 {
+            let _ = self
+                .session
+                .delete_subscription(monitored.subscription_id)
+                .await;
+            monitored.subscription_id = 0;
+        }
     }
 
     /// 新しい登録の番号で表を入れ替え、購読と MonitoredItem を作る。購読の ID と、

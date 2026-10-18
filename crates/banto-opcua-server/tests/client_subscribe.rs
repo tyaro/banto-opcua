@@ -212,6 +212,14 @@ async fn automatic_reconnect_recreates_the_subscription_with_the_new_namespace_a
     let readings = wait_for(&client, |readings| readings[0].status == StatusCode::GOOD).await;
     assert_eq!(readings[0].value, Some(ScalarValue::Double(0.0)));
 
+    // 再起動したサーバーは購読の ID を 1 から振り直すので、作り直した購読は古い購読と
+    // 同じ ID になる。作り直した購読が生きていて、その後の変化も届くことを確かめる。
+    restarted.set_fixed_speed(42.5).expect("update speed");
+    wait_for(&client, |readings| {
+        readings[0].value == Some(ScalarValue::Double(42.5))
+    })
+    .await;
+
     client.disconnect().await.expect("client disconnects");
     restarted.shutdown().await.expect("server shuts down");
 }
