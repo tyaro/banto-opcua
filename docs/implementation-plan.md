@@ -32,7 +32,7 @@ Phase 3 のセキュリティは未実施。
 | 3. 購読と動的ノード | [#7](https://github.com/tyaro/banto-opcua/issues/7) 品質だけの変更、[#5](https://github.com/tyaro/banto-opcua/issues/5) 削除と復帰 | 値が同じでも品質変更が通知される。削除通知後も MonitoredItem が残り、同じ NodeId の復帰で通知が再開する |
 | 4. 外部実装 | [#9](https://github.com/tyaro/banto-opcua/issues/9) Python asyncua と opc-plc | プレースホルダーを失敗可能な実テストに替える。バージョンを固定し、nightly と手動実行を緑にする |
 | 5. 書き込み | [#25](https://github.com/tyaro/banto-opcua/issues/25) 利用者の書き込みハンドラーに通す Write（[ADR-0004](adr/0004-write-through-host-handler.md)）。Hub 側は banto-industrial #653 | ハンドラーの結果が StatusCode の表どおりに返る。Write だけではノードの値が変わらない。Python asyncua からの Write が nightly で緑 |
-| 6. クライアント | [#33](https://github.com/tyaro/banto-opcua/issues/33) Hub のドライバ向けの Read / Write の部品（[ADR-0005](adr/0005-client-as-hub-driver.md)）。ドライバ本体は banto-industrial #678 | まとめて Read / Write がノードごとの結果を返し、切断は接続ごとの失敗になる。opc-plc 相手の相互接続が nightly で緑 |
+| 6. クライアント | [#33](https://github.com/tyaro/banto-opcua/issues/33) Hub のドライバ向けの Read / Write の部品（[ADR-0005](adr/0005-client-as-hub-driver.md)）と購読モード（[ADR-0006](adr/0006-client-subscription-latest-values.md)）。ドライバ本体は banto-industrial #678 | まとめて Read / Write がノードごとの結果を返し、切断は接続ごとの失敗になる。購読モードは登録した順に最新値を返す。opc-plc 相手の相互接続が nightly で緑 |
 
 ## 依存関係と実装上の判断
 

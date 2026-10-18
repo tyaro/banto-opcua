@@ -71,7 +71,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Build client probe
-        run: cargo build --locked -p banto-opcua-client --example interop_read
+        run: cargo build --locked -p banto-opcua-client --example interop_opc_plc
 
       - name: Start pinned opc-plc
         run: |
@@ -92,8 +92,8 @@ jobs:
           docker logs banto-opcua-interop
           exit 1
 
-      - name: Read opc-plc FastUInt1
-        run: target/debug/examples/interop_read opc.tcp://127.0.0.1:50000/
+      - name: Read, Write and subscribe opc-plc
+        run: target/debug/examples/interop_opc_plc opc.tcp://127.0.0.1:50000/
 
       - name: Stop opc-plc
         if: always()
