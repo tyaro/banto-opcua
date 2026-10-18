@@ -96,6 +96,24 @@ pub(crate) fn scalar_from_variant(variant: Variant) -> Result<Option<ScalarValue
     }))
 }
 
+/// core の値を `Variant` へ写す。型は変換しない（ADR-0005）。
+pub(crate) fn variant_from_scalar(value: &ScalarValue) -> Variant {
+    match value {
+        ScalarValue::Boolean(value) => Variant::Boolean(*value),
+        ScalarValue::SByte(value) => Variant::SByte(*value),
+        ScalarValue::Byte(value) => Variant::Byte(*value),
+        ScalarValue::Int16(value) => Variant::Int16(*value),
+        ScalarValue::UInt16(value) => Variant::UInt16(*value),
+        ScalarValue::Int32(value) => Variant::Int32(*value),
+        ScalarValue::UInt32(value) => Variant::UInt32(*value),
+        ScalarValue::Int64(value) => Variant::Int64(*value),
+        ScalarValue::UInt64(value) => Variant::UInt64(*value),
+        ScalarValue::Float(value) => Variant::Float(*value),
+        ScalarValue::Double(value) => Variant::Double(*value),
+        ScalarValue::String(value) => Variant::String(value.as_str().into()),
+    }
+}
+
 pub(crate) fn ua_node_id(node_id: &NodeId) -> UaNodeId {
     match &node_id.identifier {
         Identifier::Numeric(id) => UaNodeId::new(node_id.namespace, *id),
@@ -144,6 +162,29 @@ mod tests {
                 }
                 _ => assert_eq!(actual, expected),
             }
+        }
+    }
+
+    #[test]
+    fn scalar_values_round_trip_through_variant() {
+        for value in [
+            ScalarValue::Boolean(false),
+            ScalarValue::SByte(i8::MIN),
+            ScalarValue::Byte(u8::MAX),
+            ScalarValue::Int16(i16::MIN),
+            ScalarValue::UInt16(u16::MAX),
+            ScalarValue::Int32(i32::MIN),
+            ScalarValue::UInt32(u32::MAX),
+            ScalarValue::Int64(i64::MIN),
+            ScalarValue::UInt64(u64::MAX),
+            ScalarValue::Float(-1.25),
+            ScalarValue::Double(2.5),
+            ScalarValue::String("書き込み".into()),
+        ] {
+            assert_eq!(
+                scalar_from_variant(variant_from_scalar(&value)),
+                Ok(Some(value.clone()))
+            );
         }
     }
 

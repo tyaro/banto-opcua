@@ -47,6 +47,10 @@ impl StatusCode {
     pub const BAD_COMMUNICATION_ERROR: Self = Self(0x8005_0000);
     /// `BadInternalError`（0x80020000）。内部エラー。
     pub const BAD_INTERNAL_ERROR: Self = Self(0x8002_0000);
+    /// `BadUnknownResponse`（0x80090000）。応答の結果の数が合わない、または想定外の応答。
+    pub const BAD_UNKNOWN_RESPONSE: Self = Self(0x8009_0000);
+    /// `BadConnectionClosed`（0x80AE0000）。要求の後に接続が閉じた、または張り直された。
+    pub const BAD_CONNECTION_CLOSED: Self = Self(0x80AE_0000);
     /// `BadNotSupported`（0x803D0000）。クライアントが扱えない値（配列や対応しない型）。
     pub const BAD_NOT_SUPPORTED: Self = Self(0x803D_0000);
     /// `BadTooManyOperations`（0x80100000）。要求のノード数がサーバーの上限を超えた。
@@ -93,6 +97,8 @@ impl std::fmt::Display for StatusCode {
             0x80E4_0000 => "BadRequestNotAllowed",
             0x8005_0000 => "BadCommunicationError",
             0x8002_0000 => "BadInternalError",
+            0x8009_0000 => "BadUnknownResponse",
+            0x80AE_0000 => "BadConnectionClosed",
             0x803D_0000 => "BadNotSupported",
             0x8010_0000 => "BadTooManyOperations",
             _ => return write!(f, "StatusCode(0x{:08X})", self.0),

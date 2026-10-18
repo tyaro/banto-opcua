@@ -62,11 +62,15 @@ pub struct ClientConfig {
     /// サーバーが `MaxNodesPerRead` を広告しない（0、ノードが無い、Bad）ときに、
     /// 1 回の Read へ入れるノード数。既定は 100。
     pub default_max_nodes_per_read: NonZeroUsize,
+    /// サーバーが `MaxNodesPerWrite` を広告しない（0、ノードが無い、Bad）ときに、
+    /// 1 回の Write へ入れるノード数。既定は 10。
+    pub default_max_nodes_per_write: NonZeroUsize,
     /// 接続が切れたときに張り直すか。既定は [`ReconnectPolicy::Disabled`]。
     pub reconnect: ReconnectPolicy,
 }
 
 const DEFAULT_MAX_NODES_PER_READ: NonZeroUsize = NonZeroUsize::new(100).unwrap();
+const DEFAULT_MAX_NODES_PER_WRITE: NonZeroUsize = NonZeroUsize::new(10).unwrap();
 const DEFAULT_MAX_FAILED_KEEP_ALIVE_COUNT: NonZeroU64 = NonZeroU64::new(3).unwrap();
 
 impl ClientConfig {
@@ -79,6 +83,7 @@ impl ClientConfig {
             keep_alive_interval: Duration::from_secs(5),
             max_failed_keep_alive_count: DEFAULT_MAX_FAILED_KEEP_ALIVE_COUNT,
             default_max_nodes_per_read: DEFAULT_MAX_NODES_PER_READ,
+            default_max_nodes_per_write: DEFAULT_MAX_NODES_PER_WRITE,
             reconnect: ReconnectPolicy::Disabled,
         }
     }
@@ -110,6 +115,12 @@ impl ClientConfig {
     /// サーバーが上限を広告しないときの、1 回の Read のノード数を設定する。
     pub fn with_default_max_nodes_per_read(mut self, max: NonZeroUsize) -> Self {
         self.default_max_nodes_per_read = max;
+        self
+    }
+
+    /// サーバーが上限を広告しないときの、1 回の Write のノード数を設定する。
+    pub fn with_default_max_nodes_per_write(mut self, max: NonZeroUsize) -> Self {
+        self.default_max_nodes_per_write = max;
         self
     }
 
