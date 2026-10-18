@@ -3,7 +3,8 @@
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use banto_opcua_client::{
-    ClientConfig, ConnectedClient, Error as ClientError, OpcUaClient, WriteOutcome,
+    ClientConfig, ConnectedClient, Error as ClientError, OpcUaClient, ReconnectPolicy,
+    WriteOutcome,
     model::{NodeAddress, ScalarValue, StatusCode},
 };
 use banto_opcua_server::{
@@ -206,5 +207,73 @@ async fn write_after_the_connection_is_lost_reports_every_node_as_not_sent() {
     assert!(drain(&mut received).is_empty());
 
     client.disconnect().await.expect("disconnect after loss");
+    restarted.shutdown().await.expect("server shuts down");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn automatic_reconnect_writes_with_the_new_session_and_namespace_array() {
+    let writable = [("Setpoint", MappedValue::Double(0.0))];
+    let (server, _received) = start(ServerConfig::default().with_port(0), &writable).await;
+    let port = server.local_addr().port();
+    let client = OpcUaClient::connect_with(ClientConfig::new(server.endpoint()).with_reconnect(
+        ReconnectPolicy::Automatic {
+            initial_delay: Duration::from_millis(200),
+            max_delay: Duration::from_secs(1),
+            max_retries: None,
+        },
+    ))
+    .await
+    .expect("client connects");
+    let renamed: NodeAddress =
+        format!("nsu=urn:banto:opcua:renamed;s={CONNECTION}.{GROUP}.Setpoint")
+            .parse()
+            .unwrap();
+    let writes = [(renamed, ScalarValue::Double(7.0))];
+    assert_eq!(
+        client
+            .write_batch(&writes)
+            .await
+            .expect("write before restart"),
+        vec![StatusCode::BAD_NODE_ID_UNKNOWN],
+        "最初のサーバーには renamed の名前空間が無い"
+    );
+
+    // 名前空間 URI を変えて同じポートで立て直す。張り直した後は、新しいセッションの
+    // トークンと NamespaceArray で書く。
+    server.shutdown().await.expect("server shuts down");
+    let (restarted, mut received) = start(
+        ServerConfig::default()
+            .with_port(port)
+            .with_namespace_uri("urn:banto:opcua:renamed"),
+        &writable,
+    )
+    .await;
+    let statuses = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            match client.write_batch(&writes).await {
+                // 切断に気付く前は古い NamespaceArray で解決し、送らずに
+                // BadNodeIdUnknown を返すことがある。GOOD になるまで待つ。
+                Ok(statuses) if statuses == [StatusCode::GOOD] => break statuses,
+                Ok(_) => tokio::time::sleep(Duration::from_millis(200)).await,
+                Err(failure) => {
+                    assert!(
+                        failure
+                            .outcomes
+                            .iter()
+                            .all(|outcome| outcome.is_definitely_not_written()
+                                || matches!(outcome, WriteOutcome::Unknown(_))),
+                        "{failure:?}"
+                    );
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+    })
+    .await
+    .expect("自動再接続で張り直す");
+    assert_eq!(statuses, vec![StatusCode::GOOD]);
+    assert!(drain(&mut received).contains(&("Setpoint".to_owned(), MappedValue::Double(7.0))));
+
+    client.disconnect().await.expect("client disconnects");
     restarted.shutdown().await.expect("server shuts down");
 }

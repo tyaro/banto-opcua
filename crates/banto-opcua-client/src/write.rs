@@ -90,7 +90,10 @@ impl ChunkWriteFailure {
 ///
 /// - 送る前の失敗は `BadNotConnected` だけ（転送路が無いときに async-opcua が返す）。
 ///   ほかの送信の失敗は、要求を送った後かもしれないので結果不明にする。
-/// - Write の応答のサービスの結果が Bad、または結果が Bad の ServiceFault は、要求ごとの拒否。
+/// - 要求ごとの拒否（書かれていない）は、処理の前に返ると分かっているサービスの結果に限る
+///   （[`is_rejected_before_processing`]）。サーバーは書いた後でも ServiceFault を返す
+///   ことがある（応答を符号化できない、処理の時間切れ、内部エラー）ので、ほかの Bad は
+///   結果不明にする。
 /// - 結果の数が塊と合わない応答と、想定外の応答は結果不明（受け取ったが対応が取れない）。
 pub(crate) fn classify_response(
     response: Result<ResponseMessage, UaError>,
@@ -104,9 +107,7 @@ pub(crate) fn classify_response(
         Ok(ResponseMessage::Write(response)) => {
             let service_result = response.response_header.service_result;
             if service_result.is_bad() {
-                return Err(ChunkWriteFailure::Rejected(core_status_code(
-                    service_result,
-                )));
+                return Err(failure_of_service_result(service_result));
             }
             match response.results {
                 Some(results) if results.len() == chunk_len => Ok(results),
@@ -116,12 +117,43 @@ pub(crate) fn classify_response(
         Ok(ResponseMessage::ServiceFault(fault))
             if fault.response_header.service_result.is_bad() =>
         {
-            Err(ChunkWriteFailure::Rejected(core_status_code(
+            Err(failure_of_service_result(
                 fault.response_header.service_result,
-            )))
+            ))
         }
         Ok(_) => Err(ChunkWriteFailure::Unknown(StatusCode::BAD_UNKNOWN_RESPONSE)),
     }
+}
+
+/// Bad のサービスの結果を、拒否か結果不明に分ける。
+fn failure_of_service_result(status: UaStatusCode) -> ChunkWriteFailure {
+    if is_rejected_before_processing(status) {
+        ChunkWriteFailure::Rejected(core_status_code(status))
+    } else {
+        ChunkWriteFailure::Unknown(core_status_code(status))
+    }
+}
+
+/// サーバーが要求を処理する前に返すと分かっているサービスの結果。
+///
+/// 要求のノード数・空の要求（OperationLimits の検査）、セッションの検査、
+/// 支援しないサービス、要求を受け取れない（大きすぎる、復号できない）。
+/// async-opcua のサーバーでは、ほかに応答の符号化の失敗（`transport/tcp.rs`）、
+/// 処理の時間切れ（`BadTimeout`、`session/controller.rs`）、内部エラーが ServiceFault に
+/// なるが、これらは書いた後にも起きるので含めない。
+fn is_rejected_before_processing(status: UaStatusCode) -> bool {
+    matches!(
+        status,
+        UaStatusCode::BadTooManyOperations
+            | UaStatusCode::BadNothingToDo
+            | UaStatusCode::BadSessionIdInvalid
+            | UaStatusCode::BadSessionClosed
+            | UaStatusCode::BadSessionNotActivated
+            | UaStatusCode::BadSecureChannelIdInvalid
+            | UaStatusCode::BadServiceUnsupported
+            | UaStatusCode::BadRequestTooLarge
+            | UaStatusCode::BadDecodingError
+    )
 }
 
 /// 分けて送った Write の失敗を、送ったノードの並びの結末にする。
@@ -241,6 +273,59 @@ mod tests {
                 UaStatusCode::BadSessionIdInvalid
             )))
         );
+    }
+
+    fn service_fault(status: UaStatusCode) -> ResponseMessage {
+        ResponseMessage::ServiceFault(Box::new(ServiceFault {
+            response_header: ResponseHeader {
+                service_result: status,
+                ..Default::default()
+            },
+        }))
+    }
+
+    #[test]
+    fn faults_that_can_follow_processing_are_unknown_not_rejected() {
+        for status in [
+            UaStatusCode::BadEncodingLimitsExceeded,
+            UaStatusCode::BadResponseTooLarge,
+            UaStatusCode::BadTimeout,
+            UaStatusCode::BadInternalError,
+            UaStatusCode::Bad,
+        ] {
+            let unknown = Err(ChunkWriteFailure::Unknown(core_status_code(status)));
+            assert_eq!(
+                classify_response(Ok(service_fault(status)), 2),
+                unknown,
+                "{status}"
+            );
+            assert_eq!(
+                classify_response(Ok(write_response(status, None)), 2),
+                unknown,
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn pre_processing_faults_are_rejections() {
+        for status in [
+            UaStatusCode::BadTooManyOperations,
+            UaStatusCode::BadNothingToDo,
+            UaStatusCode::BadSessionIdInvalid,
+            UaStatusCode::BadSessionClosed,
+            UaStatusCode::BadSessionNotActivated,
+            UaStatusCode::BadSecureChannelIdInvalid,
+            UaStatusCode::BadServiceUnsupported,
+            UaStatusCode::BadRequestTooLarge,
+            UaStatusCode::BadDecodingError,
+        ] {
+            assert_eq!(
+                classify_response(Ok(service_fault(status)), 2),
+                Err(ChunkWriteFailure::Rejected(core_status_code(status))),
+                "{status}"
+            );
+        }
     }
 
     #[test]
