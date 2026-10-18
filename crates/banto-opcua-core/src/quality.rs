@@ -47,6 +47,10 @@ impl StatusCode {
     pub const BAD_COMMUNICATION_ERROR: Self = Self(0x8005_0000);
     /// `BadInternalError`（0x80020000）。内部エラー。
     pub const BAD_INTERNAL_ERROR: Self = Self(0x8002_0000);
+    /// `BadNotSupported`（0x803D0000）。クライアントが扱えない値（配列や対応しない型）。
+    pub const BAD_NOT_SUPPORTED: Self = Self(0x803D_0000);
+    /// `BadTooManyOperations`（0x80100000）。要求のノード数がサーバーの上限を超えた。
+    pub const BAD_TOO_MANY_OPERATIONS: Self = Self(0x8010_0000);
 
     /// 32 ビットの生値を返す。
     pub const fn code(self) -> u32 {
@@ -89,6 +93,8 @@ impl std::fmt::Display for StatusCode {
             0x80E4_0000 => "BadRequestNotAllowed",
             0x8005_0000 => "BadCommunicationError",
             0x8002_0000 => "BadInternalError",
+            0x803D_0000 => "BadNotSupported",
+            0x8010_0000 => "BadTooManyOperations",
             _ => return write!(f, "StatusCode(0x{:08X})", self.0),
         };
         f.write_str(name)

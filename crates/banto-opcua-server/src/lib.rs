@@ -73,5 +73,10 @@ mod tests {
             Ua::BadCommunicationError.bits()
         );
         assert_eq!(Core::BAD_INTERNAL_ERROR.code(), Ua::BadInternalError.bits());
+        assert_eq!(Core::BAD_NOT_SUPPORTED.code(), Ua::BadNotSupported.bits());
+        assert_eq!(
+            Core::BAD_TOO_MANY_OPERATIONS.code(),
+            Ua::BadTooManyOperations.bits()
+        );
     }
 }

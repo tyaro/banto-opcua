@@ -134,6 +134,7 @@ impl OpcUaServer {
         // async-opcua の既定値 100 ms は 0 要求も補正する。厳密な採取時刻が
         // 必要なクライアントには、実際に 0 ms の監視項目を作れるようにする。
         builder.limits_mut().subscriptions.min_sampling_interval_ms = 0.0;
+        builder.limits_mut().operational.max_nodes_per_read = config.max_nodes_per_read.get();
         builder.limits_mut().operational.max_nodes_per_write = config.max_nodes_per_write.get();
         let (server, handle) = builder.build().map_err(Error::Build)?;
         pki.finish()?;

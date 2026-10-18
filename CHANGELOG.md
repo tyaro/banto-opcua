@@ -9,6 +9,15 @@
 
 - core の `NodeAddress`。クライアントが読み書きするノードの文字列表現（`ns=` / `nsu=` と `i=` / `s=`、async-opcua の表示が付ける `svr=0;`）を解析し、接続先の NamespaceArray で `NodeId` へ解決する。GUID と ByteString の識別子は「未対応の識別子の型」として、ほかの解析エラーと区別する（ADR-0005、#33）。
 - core の `ScalarValue` / `ScalarType`。クライアントが読み書きする OPC UA のスカラーの組み込み型（ADR-0005、#33）。
+- クライアントの `ClientConfig` と `OpcUaClient::connect_with`。接続の待ち時間・要求の時間切れ・keep-alive の間隔と失敗回数を設定し、既定では async-opcua の自動再接続を止める。`ReconnectPolicy::Automatic` で部品の側の自動再接続も選べる（張り直した後に NamespaceArray と OperationLimits を読み直す）（ADR-0005、#33）。
+- クライアントの `ConnectedClient::read_batch`。ノードの並びをまとめて読み、値・StatusCode・SourceTimestamp をノードごとに返す。`MaxNodesPerRead` で分けて送り、`BadTooManyOperations` では半分にして送り直す。`nsu=` は接続ごとに読んだ NamespaceArray で解決する（ADR-0005、#33）。
+- サーバーの `ServerConfig::with_max_nodes_per_read`（既定 10000）。
+- core の `system_time_from_opcua_ticks` と、StatusCode の `BAD_NOT_SUPPORTED` / `BAD_TOO_MANY_OPERATIONS`。
+- 依存に `futures-util`（async-opcua が既に引いている版。クライアントのイベントループを回す）。
+
+### 変更
+
+- 既存の `OpcUaClient::connect` / `connect_with_session_timeout` も、async-opcua の自動再接続を止めるようになった（以前は 2 回まで張り直した）。
 
 ## [0.1.0] - 2026-10-17
 

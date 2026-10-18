@@ -22,7 +22,9 @@ pub use address::{NamespaceRef, NodeAddress, NodeAddressError, UnsupportedIdenti
 pub use node::{AccessLevel, Identifier, NodeClass, NodeId, VariableNode};
 pub use quality::{Quality, StatusCode, status_code_for_quality};
 pub use scalar::{ScalarType, ScalarValue};
-pub use time::{SampleTimestamps, UNIX_EPOCH_TICKS, opcua_ticks_from_system_time};
+pub use time::{
+    SampleTimestamps, UNIX_EPOCH_TICKS, opcua_ticks_from_system_time, system_time_from_opcua_ticks,
+};
 pub use value::{
     DataType, MappedReading, MappedValue, PublishDecision, TagType, map_current_value,
     publish_decision,

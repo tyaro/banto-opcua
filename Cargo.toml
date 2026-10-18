@@ -27,6 +27,8 @@ banto-opcua-core = { path = "crates/banto-opcua-core" }
 # 接続終了時のサービス中止（fork PR #2、ADR-0004）。
 # #17: これらを含む公開版が出たら crates.io に戻す。
 async-opcua = { git = "https://github.com/tyaro/async-opcua", rev = "9ee772bb994165520784528459b16c570c31990d", default-features = false }
+# クライアントのイベントループのストリームを回す。async-opcua が既に引いている。
+futures-util = { version = "0.3", default-features = false }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
 # サンプル鍵の置き場。Phase 3 の証明書ディレクトリに置き換えるまでの足場。

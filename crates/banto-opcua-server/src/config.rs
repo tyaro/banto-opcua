@@ -56,6 +56,11 @@ pub struct ServerConfig {
     /// 呼び出し側のデータディレクトリに従う。同時に起動する複数のサーバーで
     /// 同じディレクトリを共有しない（初回の生成が競合する）。
     pub pki_dir: Option<PathBuf>,
+    /// 1 回の Read で受け付けるノード数の上限。既定は 10000（async-opcua の既定）。
+    ///
+    /// 超えた要求は、サービス全体の結果 `BadTooManyOperations` で拒否する。
+    /// `ServerCapabilities/OperationLimits/MaxNodesPerRead` で広告する。
+    pub max_nodes_per_read: NonZeroUsize,
     /// 1 回の Write で受け付けるノード数の上限。既定は 10。
     ///
     /// 超えた要求は、サービス全体の結果 `BadTooManyOperations` で拒否する。
@@ -69,6 +74,7 @@ pub struct ServerConfig {
     pub max_concurrent_writes: NonZeroUsize,
 }
 
+const DEFAULT_MAX_NODES_PER_READ: NonZeroUsize = NonZeroUsize::new(10_000).unwrap();
 const DEFAULT_MAX_NODES_PER_WRITE: NonZeroUsize = NonZeroUsize::new(10).unwrap();
 const DEFAULT_MAX_CONCURRENT_WRITES: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 
@@ -85,6 +91,7 @@ impl Default for ServerConfig {
             sample_tags: true,
             advertised_host: None,
             pki_dir: None,
+            max_nodes_per_read: DEFAULT_MAX_NODES_PER_READ,
             max_nodes_per_write: DEFAULT_MAX_NODES_PER_WRITE,
             max_concurrent_writes: DEFAULT_MAX_CONCURRENT_WRITES,
         }
@@ -150,6 +157,12 @@ impl ServerConfig {
     /// 自己署名の鍵と証明書を再利用するディレクトリを設定する。
     pub fn with_pki_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.pki_dir = Some(dir.into());
+        self
+    }
+
+    /// 1 回の Read で受け付けるノード数の上限を設定する。
+    pub fn with_max_nodes_per_read(mut self, max: NonZeroUsize) -> Self {
+        self.max_nodes_per_read = max;
         self
     }
 

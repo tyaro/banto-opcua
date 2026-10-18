@@ -1,9 +1,8 @@
-# プロセス内テストと、将来のクライアント issue のための足場。
-# #201 の初期スコープはサーバーであり、このクレートの公開面は接続と
-# 標準ノードの Read だけ。
+# Hub のドライバ向けの OPC UA クライアントの部品（ADR-0005）。
+# サーバークレートのプロセス内テストも使う。
 [package]
 name = "banto-opcua-client"
-description = "banto OPC UA クライアント（足場）。Phase 1 は None / Anonymous での接続と Read"
+description = "banto OPC UA クライアント。Hub のドライバ向けに None / Anonymous でまとめて読み書きする部品"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +13,7 @@ rust-version.workspace = true
 [dependencies]
 async-opcua = { workspace = true, features = ["client"] }
 banto-opcua-core = { workspace = true }
+futures-util = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

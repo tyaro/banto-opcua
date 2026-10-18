@@ -9,7 +9,7 @@
 //! 選択・変換するが、ハブから必要な時刻を受け取る結合は banto-industrial #614
 //! の対応後に行う。現在時刻では埋めない。
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::Quality;
 
@@ -75,6 +75,27 @@ pub fn opcua_ticks_from_system_time(time: SystemTime) -> Option<i64> {
     opcua_ticks_from_unix_nanos(since_unix.as_nanos())
 }
 
+/// OPC UA DateTime の刻みを `SystemTime` へ変換する。
+///
+/// 0 以下（null と 1601 年より前）は `None`。`SystemTime` で表せない時刻も
+/// `None`（Windows は 30828 年付近まで）。Unix エポックより前の時刻も返す。
+pub fn system_time_from_opcua_ticks(ticks: i64) -> Option<SystemTime> {
+    if ticks <= 0 {
+        return None;
+    }
+    let since_unix = i128::from(ticks) - i128::from(UNIX_EPOCH_TICKS);
+    let magnitude = since_unix.unsigned_abs();
+    let duration = Duration::new(
+        u64::try_from(magnitude / 10_000_000).ok()?,
+        u32::try_from(magnitude % 10_000_000 * 100).ok()?,
+    );
+    if since_unix >= 0 {
+        UNIX_EPOCH.checked_add(duration)
+    } else {
+        UNIX_EPOCH.checked_sub(duration)
+    }
+}
+
 /// Unix エポックからのナノ秒を OPC UA の刻みへ変換する。
 ///
 /// `SystemTime` の表現範囲（Windows は 30828 年付近で止まる）には依存しない。
@@ -107,6 +128,27 @@ mod tests {
             opcua_ticks_from_system_time(time),
             Some(UNIX_EPOCH_TICKS + 10_000_000)
         );
+    }
+
+    #[test]
+    fn ticks_convert_back_to_system_time() {
+        let time = UNIX_EPOCH + Duration::new(1_700_000_000, 123_456_700);
+        let ticks = opcua_ticks_from_system_time(time).unwrap();
+        assert_eq!(system_time_from_opcua_ticks(ticks), Some(time));
+        assert_eq!(
+            system_time_from_opcua_ticks(UNIX_EPOCH_TICKS),
+            Some(UNIX_EPOCH)
+        );
+        assert_eq!(
+            system_time_from_opcua_ticks(UNIX_EPOCH_TICKS - 10_000_000),
+            UNIX_EPOCH.checked_sub(Duration::from_secs(1))
+        );
+    }
+
+    #[test]
+    fn null_and_negative_ticks_have_no_time() {
+        assert_eq!(system_time_from_opcua_ticks(0), None);
+        assert_eq!(system_time_from_opcua_ticks(-1), None);
     }
 
     #[test]

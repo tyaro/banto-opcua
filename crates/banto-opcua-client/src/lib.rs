@@ -1,18 +1,27 @@
-//! banto 向け OPC UA クライアントの足場。
+//! banto 向け OPC UA クライアントの部品（ADR-0005）。
 //!
-//! 最初の利用者はサーバークレートのプロセス内テスト。製品としてのクライアント
-//! （ハブが他の OPC UA サーバーを読む）は tyaro/banto-industrial#201 の対象外で、
-//! 別 issue。ここにあるのは SecurityPolicy `None` / Anonymous で接続し、
-//! 標準ノード `ServerStatus/State` と指定 NodeId の UInt32 を読む最小 API。
+//! Hub のドライバが外部の OPC UA サーバーを周期 Read・Write するための部品。
+//! SecurityPolicy `None` / Anonymous で接続し、ノードの並びをまとめて読む。
+//! 周期と再接続は呼び出し側（Hub の broker）の役目で、既定では自動再接続を止める。
+//! サーバークレートのプロセス内テストもこのクレートを使う。
+//! 公開 API に async-opcua の型は出さない（ADR-0001）。
 
+mod chunk;
 mod client;
+mod config;
+mod convert;
 mod error;
 
 pub use client::{ConnectedClient, OpcUaClient};
+pub use config::{ClientConfig, ReconnectPolicy};
+pub use convert::NodeReading;
 pub use error::Error;
 
 /// 読み取り結果を解釈するときの共有語彙。
 pub mod model {
     #[doc(inline)]
-    pub use banto_opcua_core::{NodeId, Quality, StatusCode};
+    pub use banto_opcua_core::{
+        NamespaceRef, NodeAddress, NodeAddressError, NodeId, Quality, ScalarType, ScalarValue,
+        StatusCode,
+    };
 }

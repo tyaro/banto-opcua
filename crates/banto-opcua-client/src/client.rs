@@ -1,44 +1,66 @@
-//! `ClientBuilder` で None / Anonymous のセッションを張り、標準ノードを読む。
+//! `ClientBuilder` で None / Anonymous のセッションを張り、まとめて読む（ADR-0005）。
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
+use banto_opcua_core::{NodeAddress, NodeId, StatusCode};
+use futures_util::StreamExt;
 use opcua::{
-    client::{Client, ClientBuilder, IdentityToken, Session},
+    client::{
+        Client, ClientBuilder, IdentityToken, Session, SessionEventLoop, SessionPollResult,
+        transport::TcpConnector,
+    },
     crypto::SecurityPolicy,
     types::{
-        AttributeId, MessageSecurityMode, NodeId as UaNodeId, ReadValueId, StatusCode,
-        TimestampsToReturn, UserTokenPolicy, VariableId, Variant,
+        AttributeId, DataValue, MessageSecurityMode, NodeId as UaNodeId, ReadValueId,
+        StatusCode as UaStatusCode, TimestampsToReturn, UserTokenPolicy, VariableId, Variant,
     },
 };
-use tokio::task::JoinHandle;
+use tokio::{sync::watch, task::JoinHandle};
 
-use crate::Error;
-use banto_opcua_core::{Identifier, NodeId};
+use crate::{
+    ClientConfig, Error, NodeReading, ReconnectPolicy,
+    chunk::{ChunkFailure, send_in_chunks},
+    convert::{core_status_code, ua_node_id},
+};
 
 /// クライアントを接続する入口。状態は持たない。
 #[derive(Debug, Default)]
 pub struct OpcUaClient;
 
 impl OpcUaClient {
-    /// `opc.tcp://` URL へ SecurityPolicy `None`、Anonymous で接続する。
-    ///
-    /// `verify_server_certs(false)` はホスト名検証だけでなく、サーバー証明書の
-    /// 検証全体を無効にする。Phase 1 はループバックの平文試験であり、サンプル
-    /// 証明書では検証を通せない。Phase 3 TODO: 証明書検証を戻す。
+    /// `opc.tcp://` URL へ SecurityPolicy `None`、Anonymous で、既定の設定で接続する。
     pub async fn connect(endpoint: &str) -> Result<ConnectedClient, Error> {
-        Self::connect_with_session_timeout(endpoint, Duration::from_secs(20)).await
+        Self::connect_with(ClientConfig::new(endpoint)).await
     }
 
-    /// エンドポイントの取得後、セッション確立を待つ時間を指定して接続する。
-    ///
-    /// 時間切れや呼び出し元によるキャンセルではイベントループを中止する。
-    /// エンドポイントの取得処理にはこの時間制限を適用しない。
+    /// セッションの確立を待つ時間だけを指定して接続する。
     pub async fn connect_with_session_timeout(
         endpoint: &str,
         session_timeout: Duration,
     ) -> Result<ConnectedClient, Error> {
+        Self::connect_with(ClientConfig::new(endpoint).with_connect_timeout(session_timeout)).await
+    }
+
+    /// 設定に従って接続し、NamespaceArray と OperationLimits を読む。
+    ///
+    /// `verify_server_certs(false)` はホスト名検証だけでなく、サーバー証明書の
+    /// 検証全体を無効にする。Phase 1 は平文・匿名であり、サンプル証明書では
+    /// 検証を通せない。Phase 3 TODO: 証明書検証を戻す。
+    ///
+    /// セッションの確立を待つ間に時間切れ、呼び出し元のキャンセル、または
+    /// async-opcua が接続を諦めたときは、イベントループを中止して `Err` を返す。
+    /// 接続後の NamespaceArray と OperationLimits の Read は、サービス自体が
+    /// 失敗したときだけ `Err` にする（ノード単位の失敗は既定値を使う）。
+    pub async fn connect_with(config: ClientConfig) -> Result<ConnectedClient, Error> {
+        config.validate().map_err(Error::Build)?;
         let pki = tempfile::tempdir().map_err(Error::Pki)?;
-        let mut client = ClientBuilder::new()
+        let builder = ClientBuilder::new()
             .application_name("banto-opcua-client")
             .application_uri("urn:banto:opcua:client")
             .product_uri("urn:banto:opcua")
@@ -48,14 +70,30 @@ impl OpcUaClient {
             // 証明書検証全体を無効化する。ホスト名だけのスイッチではない。
             // Phase 3 TODO: 検証を戻す。
             .verify_server_certs(false)
-            .session_retry_limit(2)
+            .request_timeout(config.request_timeout)
+            .keep_alive_interval(config.keep_alive_interval)
+            .max_failed_keep_alive_count(config.max_failed_keep_alive_count.get());
+        let builder = match config.reconnect {
+            ReconnectPolicy::Disabled => builder.session_retry_limit(0),
+            ReconnectPolicy::Automatic {
+                initial_delay,
+                max_delay,
+                max_retries,
+            } => builder
+                .session_retry_limit(
+                    max_retries.map_or(-1, |retries| i32::try_from(retries).unwrap_or(i32::MAX)),
+                )
+                .session_retry_initial(initial_delay)
+                .session_retry_max(max_delay),
+        };
+        let mut client = builder
             .client()
             .map_err(|reasons| Error::Build(reasons.join("; ")))?;
 
         let (session, event_loop) = client
             .connect_to_matching_endpoint(
                 (
-                    endpoint,
+                    config.endpoint_url.as_str(),
                     SecurityPolicy::None.to_str(),
                     MessageSecurityMode::None,
                     UserTokenPolicy::anonymous(),
@@ -64,23 +102,145 @@ impl OpcUaClient {
             )
             .await
             .map_err(|err| Error::Connect(err.to_string()))?;
-
-        // 時間切れや未接続で抜けると、このガードの Drop がタスクを abort する。
-        // 成功したときだけ disarm して ConnectedClient へ所有権を渡す。
-        let task = AbortOnDrop::new(event_loop.spawn());
-        let connected = tokio::time::timeout(session_timeout, session.wait_for_connection())
-            .await
-            .map_err(|_| Error::Connect("接続待ちが時間切れになりました".to_owned()))?;
-        if !connected {
-            return Err(Error::Connect("セッションが確立しませんでした".to_owned()));
+        if config.reconnect == ReconnectPolicy::Disabled {
+            // session_retry_limit(0) だけでは、切断後に 1 回張り直しを試す。
+            // イベントループを動かす前に止めれば、初回の接続とも競合しない。
+            session.disable_reconnects();
         }
 
+        let (link_tx, mut link) = watch::channel(Link::Connecting);
+        // 時間切れや未接続で抜けると、このガードの Drop がタスクを abort する。
+        // 成功したときだけ disarm して ConnectedClient へ所有権を渡す。
+        let task = AbortOnDrop::new(tokio::spawn(drive(event_loop, link_tx)));
+        let established = tokio::time::timeout(
+            config.connect_timeout,
+            link.wait_for(|state| !matches!(state, Link::Connecting)),
+        )
+        .await
+        .map_err(|_| Error::Connect("接続待ちが時間切れになりました".to_owned()))?
+        .map(|state| *state);
+        let generation = match established {
+            Ok(Link::Connected(generation)) => generation,
+            _ => return Err(Error::Connect("セッションが確立しませんでした".to_owned())),
+        };
+
+        let info = ServerInfo::read(&session, generation, &config).await?;
         Ok(ConnectedClient {
             session,
+            link,
+            info: tokio::sync::Mutex::new(Arc::new(info)),
+            config,
             task: Some(task.disarm()),
             _client: client,
             _pki: pki,
         })
+    }
+}
+
+/// イベントループから見た接続の状態。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Link {
+    /// 最初の接続を待っている。
+    Connecting,
+    /// 接続している。数は接続し直すたびに増える（最初の接続が 1）。
+    Connected(u64),
+    /// 切れて、自動再接続で張り直している。
+    Reconnecting,
+    /// イベントループが終わった。以降は接続しない。
+    Closed,
+}
+
+/// イベントループを回し、接続と切断を `link` へ知らせる。
+async fn drive(event_loop: SessionEventLoop<TcpConnector>, link: watch::Sender<Link>) {
+    let events = event_loop.enter();
+    let mut events = std::pin::pin!(events);
+    let mut generation = 0;
+    loop {
+        match events.next().await {
+            Some(Ok(SessionPollResult::Reconnected(_))) => {
+                generation += 1;
+                link.send_replace(Link::Connected(generation));
+            }
+            Some(Ok(SessionPollResult::ConnectionLost(_))) => {
+                link.send_replace(Link::Reconnecting);
+            }
+            Some(Ok(_)) => {}
+            Some(Err(_)) | None => {
+                link.send_replace(Link::Closed);
+                return;
+            }
+        }
+    }
+}
+
+/// 接続ごとに読む、サーバーの名前空間と上限。
+#[derive(Debug)]
+struct ServerInfo {
+    /// どの接続で読んだか（[`Link::Connected`] の数）。
+    generation: u64,
+    namespace_array: Vec<String>,
+    /// 1 回の Read に入れるノード数。`BadTooManyOperations` で小さくする。
+    max_nodes_per_read: AtomicUsize,
+}
+
+impl ServerInfo {
+    async fn read(
+        session: &Session,
+        generation: u64,
+        config: &ClientConfig,
+    ) -> Result<Self, Error> {
+        let nodes = [
+            VariableId::Server_NamespaceArray,
+            VariableId::Server_ServerCapabilities_OperationLimits_MaxNodesPerRead,
+        ]
+        .map(|id| ReadValueId::from(UaNodeId::from(id)));
+        let values = session
+            .read(&nodes, TimestampsToReturn::Neither, 0.0)
+            .await
+            .map_err(|err| Error::Connect(format!("サーバーの情報を読めませんでした: {err}")))?;
+        let [namespace_array, max_nodes_per_read] =
+            <[DataValue; 2]>::try_from(values).map_err(|values| {
+                Error::Connect(format!(
+                    "サーバーの情報の応答の数が要求と合いません: {} 件",
+                    values.len()
+                ))
+            })?;
+        Ok(Self {
+            generation,
+            namespace_array: namespace_array_from(namespace_array),
+            max_nodes_per_read: AtomicUsize::new(
+                limit_from(max_nodes_per_read).unwrap_or(config.default_max_nodes_per_read.get()),
+            ),
+        })
+    }
+}
+
+/// 値が String の配列でなければ空にする。`nsu=` のノードはノード単位の `BadNodeIdUnknown` になる。
+fn namespace_array_from(value: DataValue) -> Vec<String> {
+    if value.status.is_some_and(|status| status.is_bad()) {
+        return Vec::new();
+    }
+    match value.value {
+        Some(Variant::Array(array)) => array
+            .values
+            .into_iter()
+            .map(|entry| match entry {
+                Variant::String(uri) => uri.value().clone().unwrap_or_default(),
+                _ => String::new(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// 0（制限なし）、値が無い、Bad のときは `None`（設定の既定値を使う）。
+fn limit_from(value: DataValue) -> Option<usize> {
+    if value.status.is_some_and(|status| status.is_bad()) {
+        return None;
+    }
+    match value.value {
+        Some(Variant::UInt32(limit)) if limit > 0 => usize::try_from(limit).ok(),
+        _ => None,
     }
 }
 
@@ -113,15 +273,97 @@ impl<T> Drop for AbortOnDrop<T> {
 }
 
 /// 接続済みのセッション。
+///
+/// [`ReconnectPolicy::Disabled`]（既定）では、接続が切れると以降の呼び出しは
+/// すべて [`Error::Disconnected`] を返す。張り直すのは呼び出し側で、新しく
+/// 接続する。[`ReconnectPolicy::Automatic`] では、張り直している間の呼び出しが
+/// [`Error::Disconnected`] を返し、張り直した後は NamespaceArray と OperationLimits を
+/// 読み直してから要求を送る。
 #[must_use = "切断するまで ConnectedClient を保持する"]
 pub struct ConnectedClient {
     session: Arc<Session>,
-    task: Option<JoinHandle<StatusCode>>,
+    link: watch::Receiver<Link>,
+    info: tokio::sync::Mutex<Arc<ServerInfo>>,
+    config: ClientConfig,
+    task: Option<JoinHandle<()>>,
     _client: Client,
     _pki: tempfile::TempDir,
 }
 
 impl ConnectedClient {
+    /// 接続していれば、その接続で読んだサーバーの情報を返す。張り直した後なら読み直す。
+    async fn server_info(&self) -> Result<Arc<ServerInfo>, Error> {
+        let Link::Connected(generation) = *self.link.borrow() else {
+            return Err(Error::Disconnected);
+        };
+        let mut info = self.info.lock().await;
+        if info.generation != generation {
+            *info = Arc::new(ServerInfo::read(&self.session, generation, &self.config).await?);
+        }
+        Ok(Arc::clone(&info))
+    }
+
+    /// ノードの並びの Value 属性をまとめて読み、ノードごとの結果を要求の順に返す。
+    ///
+    /// - `TimestampsToReturn` は `Source`、`maxAge` は 0（機器から読み直す）。
+    /// - サーバーの `MaxNodesPerRead` を超える要求は分けて送る。`BadTooManyOperations`
+    ///   が返ったら塊を半分にして送り直し、1 ノードでも拒否されたら `Err`。
+    /// - 空の並びは送らずに空の結果を返す。
+    /// - `nsu=` の URI が NamespaceArray に無いノードは、送らずに `BadNodeIdUnknown`。
+    /// - 切断、時間切れ、サービス全体のエラー、応答の数の不一致は `Err`（接続ごとの
+    ///   失敗）。ノード単位の失敗は結果の [`NodeReading::status`] にする。
+    pub async fn read_batch(&self, nodes: &[NodeAddress]) -> Result<Vec<NodeReading>, Error> {
+        if nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let info = self.server_info().await?;
+        let mut readings: Vec<Option<NodeReading>> = vec![None; nodes.len()];
+        let mut positions = Vec::with_capacity(nodes.len());
+        let mut requests = Vec::with_capacity(nodes.len());
+        for (position, address) in nodes.iter().enumerate() {
+            match address.resolve(&info.namespace_array) {
+                Some(node_id) => {
+                    positions.push(position);
+                    requests.push(ReadValueId {
+                        node_id: ua_node_id(&node_id),
+                        attribute_id: AttributeId::Value as u32,
+                        ..Default::default()
+                    });
+                }
+                None => {
+                    readings[position] =
+                        Some(NodeReading::without_value(StatusCode::BAD_NODE_ID_UNKNOWN));
+                }
+            }
+        }
+
+        let mut chunk_size = info.max_nodes_per_read.load(Ordering::Relaxed);
+        let result = send_in_chunks(
+            &requests,
+            &mut chunk_size,
+            |err: &opcua::types::Error| err.status() == UaStatusCode::BadTooManyOperations,
+            |chunk| async move {
+                self.session
+                    .read(&chunk, TimestampsToReturn::Source, 0.0)
+                    .await
+            },
+        )
+        .await;
+        info.max_nodes_per_read.store(chunk_size, Ordering::Relaxed);
+        let values = result.map_err(|err| match err.failure {
+            ChunkFailure::Request { error, .. } => {
+                Error::Read(format!("{}: {error}", core_status_code(error.status())))
+            }
+            ChunkFailure::CountMismatch { expected, actual } => Error::Read(format!(
+                "応答の結果の数が要求と合いません（要求 {expected} 件、結果 {actual} 件）"
+            )),
+        })?;
+        for (position, value) in positions.into_iter().zip(values) {
+            readings[position] = Some(NodeReading::from_data_value(value));
+        }
+        Ok(readings.into_iter().flatten().collect())
+    }
+
     /// `ServerStatus/State` を読む。OPC UA では Running が 0。
     pub async fn read_server_state(&self) -> Result<i32, Error> {
         let value = self
@@ -138,11 +380,7 @@ impl ConnectedClient {
     /// 指定した NodeId の UInt32 値を読む。外部サーバーのタグ Read に使う。
     /// 値が無い、StatusCode が Bad、または型が UInt32 以外の場合はエラーにする。
     pub async fn read_u32(&self, node_id: &NodeId) -> Result<u32, Error> {
-        let id = match &node_id.identifier {
-            Identifier::Numeric(id) => UaNodeId::new(node_id.namespace, *id),
-            Identifier::String(id) => UaNodeId::new(node_id.namespace, id.clone()),
-        };
-        let value = self.read_value(id).await?;
+        let value = self.read_value(ua_node_id(node_id)).await?;
         match value {
             Variant::UInt32(number) => Ok(number),
             other => Err(Error::Read(format!(
@@ -180,15 +418,25 @@ impl ConnectedClient {
     }
 
     /// セッションを閉じてイベントループの終了を待つ。
+    ///
+    /// 接続がすでに切れていれば、閉じる要求は送らずにイベントループを止める。
     pub async fn disconnect(mut self) -> Result<(), Error> {
-        self.session
-            .disconnect()
-            .await
-            .map_err(|err| Error::Connect(err.to_string()))?;
+        let connected = matches!(*self.link.borrow(), Link::Connected(_));
+        let result = if connected {
+            self.session
+                .disconnect()
+                .await
+                .map_err(|err| Error::Connect(err.to_string()))
+        } else {
+            Ok(())
+        };
         if let Some(task) = self.task.take() {
+            if !connected || result.is_err() {
+                task.abort();
+            }
             let _ = task.await;
         }
-        Ok(())
+        result
     }
 }
 
@@ -212,6 +460,8 @@ mod tests {
         Arc,
         atomic::{AtomicBool, Ordering},
     };
+
+    use opcua::types::{Array, UAString, VariantScalarTypeId};
 
     use super::*;
 
@@ -260,5 +510,51 @@ mod tests {
         })
         .await
         .expect("spawn したタスクが中止されず残っている");
+    }
+
+    fn data_value(value: Variant, status: Option<UaStatusCode>) -> DataValue {
+        DataValue {
+            value: Some(value),
+            status,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn advertised_limit_is_used_unless_zero_missing_or_bad() {
+        assert_eq!(limit_from(data_value(Variant::UInt32(7), None)), Some(7));
+        assert_eq!(limit_from(data_value(Variant::UInt32(0), None)), None);
+        assert_eq!(
+            limit_from(data_value(
+                Variant::UInt32(7),
+                Some(UaStatusCode::BadNodeIdUnknown)
+            )),
+            None
+        );
+        assert_eq!(limit_from(DataValue::default()), None);
+        assert_eq!(limit_from(data_value(Variant::Int32(7), None)), None);
+    }
+
+    #[test]
+    fn namespace_array_is_empty_unless_a_string_array() {
+        let array = Variant::Array(Box::new(
+            Array::new(
+                VariantScalarTypeId::String,
+                vec![
+                    Variant::String(UAString::from("http://opcfoundation.org/UA/")),
+                    Variant::String(UAString::from("urn:a")),
+                ],
+            )
+            .unwrap(),
+        ));
+        assert_eq!(
+            namespace_array_from(data_value(array.clone(), None)),
+            vec!["http://opcfoundation.org/UA/", "urn:a"]
+        );
+        assert!(
+            namespace_array_from(data_value(array, Some(UaStatusCode::BadNodeIdUnknown)))
+                .is_empty()
+        );
+        assert!(namespace_array_from(data_value(Variant::Int32(1), None)).is_empty());
     }
 }
