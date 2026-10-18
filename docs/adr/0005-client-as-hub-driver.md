@@ -100,14 +100,20 @@ async-opcua の型は出さない（ADR-0001、ADR-0002 と同じ境界）。
   - 解析の結果は、名前空間を番号か URI のどちらかで持つ新しい型（ExpandedNodeId に
     相当）にする。既存の `NodeId`（番号だけを持つ）はサーバー側の語彙として変えない。
     クライアントの部品が接続時に、この型を `NodeId` へ解決する。
-  - `nsu=` の形は Part 6 の ExpandedNodeId の文字列表現で、URI は百分率符号化されている
-    （`;` は `%3B`、`%` は `%25` など）。解析で `%XX` を大文字・小文字を問わず復号し、
-    復号した URI を NamespaceArray と比べる。たとえば `nsu=urn:vendor:a%3Bb;s=Tag` の
-    URI は `urn:vendor:a;b`。表示するときは `;` と `%` を符号化し直す。`svr=`（別の
-    サーバー）は受け付けない。
+  - `nsu=` の形は Part 6 の ExpandedNodeId の文字列表現で、URI の `;` は `%3B`、`%` は
+    `%25` に符号化されている。解析でこの 2 つだけを大文字・小文字を問わず復号し、
+    復号した URI を NamespaceArray と比べる。ほかの `%XX` は URI 自体の符号化
+    （`urn:my%20ns` など）なので復号しない（2026-10-18、#33。async-opcua と同じ）。
+    たとえば `nsu=urn:vendor:a%3Bb;s=Tag` の URI は `urn:vendor:a;b`。表示するときは
+    `;` と `%` を符号化し直す。
+  - `svr=` は 0（このサーバー）だけを受け付ける。async-opcua の ExpandedNodeId の表示は
+    `svr=0;` を付けるため。0 以外（別のサーバー）は受け付けない。
+  - 並びは Part 6 の順だけを受け付ける（python asyncua の表示のように識別子の後ろに
+    `nsu=` を置く形は受け付けない）。前後の空白は解析で除かず、Hub が除く。
   - GUID（`g=`）と ByteString（`b=`）は、当面は「未対応の識別子の型」として、ほかの
     解析エラーと区別して返す。
-  - `ns=0` を表示で省くか（Part 6 の正規形）は、#33 で core の `Display` と合わせて決める。
+  - 表示では `ns=0;` を省かない（2026-10-18、#33）。Part 6 の正規形は省く形だが、既存の
+    `NodeId` の `Display` と同じ形にそろえる。解析は省いた形も受け付ける。
   - Hub は登録時にこの解析を使い、解析できないアドレスを登録させない。
 - **値の型:** OPC UA のスカラーの組み込み型（Boolean、SByte〜Int64、Byte〜UInt64、
   Float、Double、String）に対応する列挙。

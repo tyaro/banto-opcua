@@ -5,6 +5,11 @@
 
 ## [Unreleased]
 
+### 追加
+
+- core の `NodeAddress`。クライアントが読み書きするノードの文字列表現（`ns=` / `nsu=` と `i=` / `s=`、async-opcua の表示が付ける `svr=0;`）を解析し、接続先の NamespaceArray で `NodeId` へ解決する。GUID と ByteString の識別子は「未対応の識別子の型」として、ほかの解析エラーと区別する（ADR-0005、#33）。
+- core の `ScalarValue` / `ScalarType`。クライアントが読み書きする OPC UA のスカラーの組み込み型（ADR-0005、#33）。
+
 ## [0.1.0] - 2026-10-17
 
 最初のタグ。Phase 1 の固定タグ、Phase 2 の動的タグと品質・時刻の写像、
