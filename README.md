@@ -73,8 +73,8 @@ Issue 間の依存関係と実装順は [実装計画](docs/implementation-plan.
 | Phase 2 | タグレジストリ、アドレス空間、型・品質・時刻の写像、設定、管理 UI、Windows サービス | 主に banto-hub。写像の純関数は core |
 | Phase 3 | 証明書、SecurityPolicy、認証、トラスト、相互接続、ソーク | 本リポジトリとハブ |
 | Write | 利用者の書き込みハンドラーに通す Write（[ADR-0004](docs/adr/0004-write-through-host-handler.md)）。Hub 側は banto-industrial #653 | 本リポジトリとハブ |
-| クライアント | Hub のドライバ向けの Read / Write の部品（[ADR-0005](docs/adr/0005-client-as-hub-driver.md)、[#33](https://github.com/tyaro/banto-opcua/issues/33)）。ドライバ本体は banto-industrial #678 | 本リポジトリとハブ |
-| 別 issue | Method、Event、Historical Access、クライアントの購読と Browse | 未起票または別 issue |
+| クライアント | Hub のドライバ向けの Read / Write の部品（[ADR-0005](docs/adr/0005-client-as-hub-driver.md)、[#33](https://github.com/tyaro/banto-opcua/issues/33)）と、購読で最新値を持つ購読モード（[ADR-0006](docs/adr/0006-client-subscription-latest-values.md)）。ドライバ本体は banto-industrial #678 | 本リポジトリとハブ |
+| 別 issue | Method、Event、Historical Access、クライアントの Browse | 未起票または別 issue |
 
 #201 の初期スコープ外はクライアント製品、Method、Event / Alarm、
 Historical Access、コンパニオン仕様、Discovery Server、細かい権限である。
