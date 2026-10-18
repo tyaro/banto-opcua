@@ -1,6 +1,6 @@
 # ADR-0006: クライアントの購読モードでは、購読で受けた最新値を部品が持つ
 
-- 状態: Proposed
+- 状態: Accepted
 - 日付: 2026-10-18
 - 関連: [ADR-0005](0005-client-as-hub-driver.md)、[#33](https://github.com/tyaro/banto-opcua/issues/33)、[banto-industrial #678](https://github.com/tyaro/banto-industrial/issues/678)
 
@@ -42,11 +42,13 @@ async-opcua 0.19（fork `9ee772b`）のクライアントの購読について�
 
 ### 設定と API
 
-- `ClientConfig` に読み方を足す。既定は周期 Read（今までどおり）。
-  - 購読を選ぶと、Publish の間隔、sampling の間隔、購読の lifetime と keep-alive の回数を
-    受け取る。キューの大きさは 1、あふれたら古い方を捨てる。データ変化のフィルタは
-    付けない（サーバーの既定の StatusValue。値か StatusCode が変わったら通知）。デッド
-    バンドは後回し。
+- `ClientConfig` に購読の設定（`SubscriptionSettings`）を足す。読み方（周期 Read か購読か）
+  は Hub の接続の設定で選び、購読モードの接続では下の登録と取り出しを使う（2026-10-18、
+  実装で決めた。部品の中で読み方を切り替える必要は無かった）。
+  - 購読の設定は、Publish の間隔、sampling の間隔、購読の lifetime と keep-alive の回数。
+    キューの大きさは 1、あふれたら古い方を捨てる。データ変化のフィルタは付けない
+    （サーバーの既定の StatusValue。値か StatusCode が変わったら通知）。デッドバンドは
+    後回し。
 - 購読モードの接続では、Hub が収集するノードの並びを登録し、最新値を取り出す。
   - 登録: ノードの並びを受け取り、購読を作り直して MonitoredItem を作る。ノードごとの
     作成の StatusCode を返す。並びを変えるときは、登録し直す（差分の更新は後回し）。
@@ -54,7 +56,11 @@ async-opcua 0.19（fork `9ee772b`）のクライアントの購読について�
     （[`NodeReading`]）を返す。`read_batch` と同じ形で、Hub のドライバは
     `BrokerSession::read_batch` にそのまま写せる。
   - まだ最初の通知が届いていないノードは、値なし・`BadWaitingForInitialData`。作成に
-    失敗したノード（`BadNodeIdUnknown`、解決できない `nsu=` など）は、その StatusCode。
+    失敗したノード（解決できない `nsu=` の `BadNodeIdUnknown`、上限を超えた
+    `BadTooManyMonitoredItems` など）は、その StatusCode。
+  - 無いノードの MonitoredItem を作成の段階で拒まず、最初の通知で `BadNodeIdUnknown` を
+    送るサーバーがある（async-opcua と本リポジトリのサーバー）。その行は通知のとおり
+    `BadNodeIdUnknown` になる。
   - 取り出しの `Err` は、`read_batch` と同じく接続ごとの失敗。
 - 購読モードでも `write_batch` はそのまま使える。`read_batch` も使える（周期 Read の
   代わりではなく、必要なときに 1 回読むため）。

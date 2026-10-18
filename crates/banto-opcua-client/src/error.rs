@@ -17,6 +17,9 @@ pub enum Error {
     /// 接続が切れている（自動再接続のときは張り直している最中）。
     #[error("OPC UA サーバーとの接続が切れています")]
     Disconnected,
+    /// 購読や MonitoredItem を作れなかった、または購読を失った（ADR-0006）。
+    #[error("OPC UA の購読に失敗しました: {0}")]
+    Subscribe(String),
     /// Write の要求が拒否された、または結果を受け取れなかった。
     #[error("OPC UA の Write に失敗しました: {0}")]
     Write(String),

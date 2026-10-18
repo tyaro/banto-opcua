@@ -7,6 +7,9 @@
 
 ### 追加
 
+- クライアントの購読モード（ADR-0006）。`ConnectedClient::monitor` でノードの並びを登録し、`ConnectedClient::latest` で購読で受けた最新の値・StatusCode・SourceTimestamp を登録した順に取り出す。設定は `ClientConfig::with_subscription`（`SubscriptionSettings`）。MonitoredItem の作成は `MaxMonitoredItemsPerCall` で分け、購読に入れられる数を超えたノードは `BadTooManyMonitoredItems` にする。Publish の失敗では購読を作り直し、購読を失ったら（`BadNoSubscription` など）接続ごとの失敗にする。async-opcua の購読の作り直しは使わず、自動再接続の後は NamespaceArray を読み直して部品が作り直す。
+- core の StatusCode に `BAD_WAITING_FOR_INITIAL_DATA` / `BAD_TOO_MANY_MONITORED_ITEMS`。
+
 - core の `NodeAddress`。クライアントが読み書きするノードの文字列表現（`ns=` / `nsu=` と `i=` / `s=`、async-opcua の表示が付ける `svr=0;`）を解析し、接続先の NamespaceArray で `NodeId` へ解決する。GUID と ByteString の識別子は「未対応の識別子の型」として、ほかの解析エラーと区別する（ADR-0005、#33）。
 - core の `ScalarValue` / `ScalarType`。クライアントが読み書きする OPC UA のスカラーの組み込み型（ADR-0005、#33）。
 - クライアントの `ClientConfig` と `OpcUaClient::connect_with`。接続の待ち時間・要求の時間切れ・keep-alive の間隔と失敗回数を設定し、既定では async-opcua の自動再接続を止める。`ReconnectPolicy::Automatic` で部品の側の自動再接続も選べる（張り直した後に NamespaceArray と OperationLimits を読み直す）（ADR-0005、#33）。

@@ -83,6 +83,14 @@ mod tests {
             Ua::BadConnectionClosed.bits()
         );
         assert_eq!(
+            Core::BAD_WAITING_FOR_INITIAL_DATA.code(),
+            Ua::BadWaitingForInitialData.bits()
+        );
+        assert_eq!(
+            Core::BAD_TOO_MANY_MONITORED_ITEMS.code(),
+            Ua::BadTooManyMonitoredItems.bits()
+        );
+        assert_eq!(
             Core::BAD_TOO_MANY_OPERATIONS.code(),
             Ua::BadTooManyOperations.bits()
         );

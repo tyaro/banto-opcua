@@ -11,10 +11,11 @@ mod client;
 mod config;
 mod convert;
 mod error;
+mod subscribe;
 mod write;
 
 pub use client::{ConnectedClient, OpcUaClient};
-pub use config::{ClientConfig, ReconnectPolicy};
+pub use config::{ClientConfig, ReconnectPolicy, SubscriptionSettings};
 pub use convert::NodeReading;
 pub use error::Error;
 pub use write::{WriteFailure, WriteOutcome};

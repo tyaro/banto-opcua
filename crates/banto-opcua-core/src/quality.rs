@@ -51,6 +51,10 @@ impl StatusCode {
     pub const BAD_UNKNOWN_RESPONSE: Self = Self(0x8009_0000);
     /// `BadConnectionClosed`（0x80AE0000）。要求の後に接続が閉じた、または張り直された。
     pub const BAD_CONNECTION_CLOSED: Self = Self(0x80AE_0000);
+    /// `BadWaitingForInitialData`（0x80320000）。購読の最初の通知がまだ届いていない。
+    pub const BAD_WAITING_FOR_INITIAL_DATA: Self = Self(0x8032_0000);
+    /// `BadTooManyMonitoredItems`（0x80DB0000）。購読に入れられる MonitoredItem の数を超えた。
+    pub const BAD_TOO_MANY_MONITORED_ITEMS: Self = Self(0x80DB_0000);
     /// `BadNotSupported`（0x803D0000）。クライアントが扱えない値（配列や対応しない型）。
     pub const BAD_NOT_SUPPORTED: Self = Self(0x803D_0000);
     /// `BadTooManyOperations`（0x80100000）。要求のノード数がサーバーの上限を超えた。
@@ -99,6 +103,8 @@ impl std::fmt::Display for StatusCode {
             0x8002_0000 => "BadInternalError",
             0x8009_0000 => "BadUnknownResponse",
             0x80AE_0000 => "BadConnectionClosed",
+            0x8032_0000 => "BadWaitingForInitialData",
+            0x80DB_0000 => "BadTooManyMonitoredItems",
             0x803D_0000 => "BadNotSupported",
             0x8010_0000 => "BadTooManyOperations",
             _ => return write!(f, "StatusCode(0x{:08X})", self.0),
