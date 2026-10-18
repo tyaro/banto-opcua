@@ -77,7 +77,10 @@ impl OpcUaClient {
             .verify_server_certs(false)
             .request_timeout(config.request_timeout)
             .keep_alive_interval(config.keep_alive_interval)
-            .max_failed_keep_alive_count(config.max_failed_keep_alive_count.get());
+            .max_failed_keep_alive_count(config.max_failed_keep_alive_count.get())
+            // 張り直した後の購読は部品が作り直す（ADR-0006）。async-opcua の作り直しは
+            // 古い名前空間の番号をそのまま使い、作った購読もこちらでは追えない。
+            .recreate_subscriptions(false);
         let builder = match config.reconnect {
             ReconnectPolicy::Disabled => builder.session_retry_limit(0),
             ReconnectPolicy::Automatic {
@@ -660,7 +663,8 @@ impl ConnectedClient {
     /// 購読モード（ADR-0006）: ノードの並びを登録し、購読を作り直して監視する。
     ///
     /// ノードごとの MonitoredItem の作成の StatusCode を登録した順に返す。前の登録は
-    /// 新しい購読ができてから消す。
+    /// 新しい購読ができてから消す。新しい購読を作れなかったときは前の登録を残し、
+    /// 次の [`Self::latest`] で前の並びから作り直す。
     /// - `nsu=` の URI が NamespaceArray に無いノードは、作らずに `BadNodeIdUnknown`。
     /// - 購読に入れられる数を超えたノードは `BadTooManyMonitoredItems`。
     /// - 作成に失敗したノードは、登録し直すまで [`Self::latest`] でもその StatusCode を返す。
@@ -669,15 +673,23 @@ impl ConnectedClient {
     pub async fn monitor(&self, nodes: &[NodeAddress]) -> Result<Vec<StatusCode>, Error> {
         let info = self.server_info().await?;
         let mut monitored = self.monitored.lock().await;
-        let previous = monitored.take();
-        let created = self.subscribe(&info, nodes, None).await;
-        if let Some(previous) = previous {
+        let (subscription_id, statuses) = match self.subscribe(&info, nodes, None).await {
+            Ok(created) => created,
+            Err(error) => {
+                // 前の登録は残す。表はもう新しい登録に替わっているので、次の latest で
+                // 前の並びから作り直すよう、世代を合わなくしておく。
+                if let Some(previous) = monitored.as_mut() {
+                    previous.generation = 0;
+                }
+                return Err(error);
+            }
+        };
+        if let Some(previous) = monitored.take() {
             let _ = self
                 .session
                 .delete_subscription(previous.subscription_id)
                 .await;
         }
-        let (subscription_id, statuses) = created?;
         *monitored = Some(Monitored {
             addresses: nodes.to_vec(),
             subscription_id,
