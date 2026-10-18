@@ -7,7 +7,7 @@ use std::{
 
 use banto_opcua_client::{
     ClientConfig, ConnectedClient, Error as ClientError, OpcUaClient, ReconnectPolicy,
-    model::{NodeAddress, ScalarValue, StatusCode},
+    model::{NodeAddress, NodeId, ScalarValue, StatusCode},
 };
 use banto_opcua_server::{
     OpcUaServer, RunningServer, ServerConfig, TagReading,
@@ -174,6 +174,14 @@ async fn stopped_server_fails_later_calls_without_reconnecting() {
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert!(matches!(
         client.read_batch(&nodes).await,
+        Err(ClientError::Disconnected)
+    ));
+    assert!(matches!(
+        client.read_server_state().await,
+        Err(ClientError::Disconnected)
+    ));
+    assert!(matches!(
+        client.read_u32(&NodeId::numeric(0, 11705)).await,
         Err(ClientError::Disconnected)
     ));
 

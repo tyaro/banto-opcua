@@ -436,6 +436,11 @@ impl ConnectedClient {
                 }))
             }
         })?;
+        // 要求を 1 つも送らなかった（全ノードの URI が解決できなかった）ときも、
+        // 解決に使った NamespaceArray がまだその接続のものかを確かめる。
+        if !self.on_connection(generation) {
+            return Err(Error::Disconnected);
+        }
         for (position, value) in positions.into_iter().zip(values) {
             readings[position] = Some(NodeReading::from_data_value(value));
         }
@@ -443,6 +448,8 @@ impl ConnectedClient {
     }
 
     /// `ServerStatus/State` を読む。OPC UA では Running が 0。
+    ///
+    /// 接続が切れている（張り直している）ときは [`Error::Disconnected`]。
     pub async fn read_server_state(&self) -> Result<i32, Error> {
         let value = self
             .read_value(VariableId::Server_ServerStatus_State.into())
@@ -457,6 +464,7 @@ impl ConnectedClient {
 
     /// 指定した NodeId の UInt32 値を読む。外部サーバーのタグ Read に使う。
     /// 値が無い、StatusCode が Bad、または型が UInt32 以外の場合はエラーにする。
+    /// 接続が切れている（張り直している）ときは [`Error::Disconnected`]。
     pub async fn read_u32(&self, node_id: &NodeId) -> Result<u32, Error> {
         let value = self.read_value(ua_node_id(node_id)).await?;
         match value {
@@ -467,7 +475,12 @@ impl ConnectedClient {
         }
     }
 
+    /// 1 ノードを読む。接続が切れている（張り直している）ときは [`Error::Disconnected`]。
     async fn read_value(&self, node_id: UaNodeId) -> Result<Variant, Error> {
+        let connected = || matches!(*self.link.borrow(), Link::Connected(_));
+        if !connected() {
+            return Err(Error::Disconnected);
+        }
         let values = self
             .session
             .read(
@@ -480,7 +493,13 @@ impl ConnectedClient {
                 0.0,
             )
             .await
-            .map_err(|err| Error::Read(err.to_string()))?;
+            .map_err(|err| {
+                if connected() {
+                    Error::Read(err.to_string())
+                } else {
+                    Error::Disconnected
+                }
+            })?;
         let value = values
             .into_iter()
             .next()
