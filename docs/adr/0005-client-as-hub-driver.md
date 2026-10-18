@@ -85,7 +85,7 @@ async-opcua の型は出さない（ADR-0001、ADR-0002 と同じ境界）。
   機器に届いている。そこで Write の `Err` には、ノードごとの結末を持たせる。
   - **書いた結果:** 応答を受け取り、結果の数が要求と合った分は、その StatusCode。
   - **書かれていない（確実に）:** 次の閉じた一覧に限る。
-    - 送る前に失敗した分（`BadNotConnected` など）と、まだ送っていない分。
+    - 送る前に失敗した分（`BadNotConnected`）と、まだ送っていない分。
     - 応答のサービス全体の結果が Bad だった分（`BadTooManyOperations`、
       `BadSessionIdInvalid` など。適用されていないことが確定している）。拒否の
       StatusCode を持たせる。
@@ -97,9 +97,22 @@ async-opcua の型は出さない（ADR-0001、ADR-0002 と同じ境界）。
   分からないものを「書かれていない」に入れると、適用されたかもしれない Write を未適用と
   監査に残してしまう。そこで「書かれていない」を閉じた一覧にし、残りを結果不明にする。
 
-  async-opcua のエラーからは StatusCode を取れるので、この分け方は async-opcua の型を
-  公開せずに実装できる。Hub のドライバはこれを見て、書けたノード・書けたか分からない
-  ノード・書いていないノードを区別して返し、監査に残す（banto-industrial #678）。
+  Hub のドライバはこれを見て、書けたノード・書けたか分からないノード・書いていない
+  ノードを区別して返し、監査に残す（banto-industrial #678）。
+
+  実装（2026-10-18、#33）: `Session::write` はサービスの拒否も送信の失敗も同じ
+  `Error`（StatusCode）にして返すので、「要求ごとの拒否」と「送った後の失敗」を分けられ
+  ない。そこで Write の要求を自分で組み立て（ヘッダーは `services::Write` の
+  `header()` から取る）、`session.channel().send()` で送る。
+  - `send` の `Err` のうち、送る前と分かるのは `BadNotConnected` だけ（転送路が無いときに
+    async-opcua が返す）。ほかは結果不明にする。
+  - 応答を受け取れたら、Write の応答のサービスの結果、または ServiceFault の結果が Bad の
+    ものを拒否にする。想定外の応答と、結果の数の不一致は結果不明（`BadUnknownResponse`）。
+  - 自動再接続のとき、塊を送る前に張り直していたらその塊から先は送らない。応答の後に
+    張り直していたら、古い名前空間番号で新しい接続へ送った可能性があるので、その塊を
+    結果不明（`BadConnectionClosed`）にする。
+  - 公開 API では、結末を `WriteOutcome` の `Completed`（書いた結果）、`Unknown`
+    （結果不明）、`Rejected` と `NotSent`（書かれていない）で表す。
 
 ### core に置くもの
 

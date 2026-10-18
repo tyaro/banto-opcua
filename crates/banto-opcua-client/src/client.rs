@@ -1,4 +1,4 @@
-//! `ClientBuilder` で None / Anonymous のセッションを張り、まとめて読む（ADR-0005）。
+//! `ClientBuilder` で None / Anonymous のセッションを張り、まとめて読み書きする（ADR-0005）。
 
 use std::{
     sync::{
@@ -8,25 +8,27 @@ use std::{
     time::Duration,
 };
 
-use banto_opcua_core::{NodeAddress, NodeId, StatusCode};
+use banto_opcua_core::{NodeAddress, NodeId, ScalarValue, StatusCode};
 use futures_util::StreamExt;
 use opcua::{
     client::{
         Client, ClientBuilder, IdentityToken, Session, SessionEventLoop, SessionPollResult,
-        transport::TcpConnector,
+        services, transport::TcpConnector,
     },
     crypto::SecurityPolicy,
     types::{
         AttributeId, DataValue, MessageSecurityMode, NodeId as UaNodeId, ReadValueId,
         StatusCode as UaStatusCode, TimestampsToReturn, UserTokenPolicy, VariableId, Variant,
+        WriteRequest, WriteValue,
     },
 };
 use tokio::{sync::watch, task::JoinHandle};
 
 use crate::{
-    ClientConfig, Error, NodeReading, ReconnectPolicy,
+    ClientConfig, Error, NodeReading, ReconnectPolicy, WriteFailure, WriteOutcome,
     chunk::{ChunkFailure, send_in_chunks},
-    convert::{core_status_code, ua_node_id},
+    convert::{core_status_code, ua_node_id, variant_from_scalar},
+    write::{ChunkWriteFailure, classify_response, error_of, outcomes_of},
 };
 
 /// クライアントを接続する入口。状態は持たない。
@@ -198,6 +200,8 @@ struct ServerInfo {
     namespace_array: Vec<String>,
     /// 1 回の Read に入れるノード数。`BadTooManyOperations` で小さくする。
     max_nodes_per_read: AtomicUsize,
+    /// 1 回の Write に入れるノード数。`BadTooManyOperations` で小さくする。
+    max_nodes_per_write: AtomicUsize,
 }
 
 impl ServerInfo {
@@ -209,6 +213,7 @@ impl ServerInfo {
         let nodes = [
             VariableId::Server_NamespaceArray,
             VariableId::Server_ServerCapabilities_OperationLimits_MaxNodesPerRead,
+            VariableId::Server_ServerCapabilities_OperationLimits_MaxNodesPerWrite,
         ]
         .map(|id| ReadValueId::from(UaNodeId::from(id)));
         // 上限を知る前の Read なので、MaxNodesPerRead が 1 のサーバーにも分けて送る。
@@ -226,13 +231,17 @@ impl ServerInfo {
                 describe_failure(err.failure)
             )
         })?;
-        let [namespace_array, max_nodes_per_read] = <[DataValue; 2]>::try_from(values)
-            .map_err(|_| "サーバーの情報の応答の数が要求と合いません".to_owned())?;
+        let [namespace_array, max_nodes_per_read, max_nodes_per_write] =
+            <[DataValue; 3]>::try_from(values)
+                .map_err(|_| "サーバーの情報の応答の数が要求と合いません".to_owned())?;
         Ok(Self {
             generation,
             namespace_array: namespace_array_from(namespace_array),
             max_nodes_per_read: AtomicUsize::new(
                 limit_from(max_nodes_per_read).unwrap_or(config.default_max_nodes_per_read.get()),
+            ),
+            max_nodes_per_write: AtomicUsize::new(
+                limit_from(max_nodes_per_write).unwrap_or(config.default_max_nodes_per_write.get()),
             ),
         })
     }
@@ -445,6 +454,133 @@ impl ConnectedClient {
             readings[position] = Some(NodeReading::from_data_value(value));
         }
         Ok(readings.into_iter().flatten().collect())
+    }
+
+    /// ノードと値の並びを Value 属性へまとめて書き、ノードごとの StatusCode を要求の順に返す。
+    ///
+    /// - DataValue には値だけを入れる（StatusCode も時刻も付けない）。IndexRange は付けない。
+    ///   型は変換しない。ノードの型と違えばサーバーが `BadTypeMismatch` を返す。
+    /// - サーバーの `MaxNodesPerWrite` を超える要求は分けて送る。`BadTooManyOperations` が
+    ///   返ったら、拒否された塊とそれ以降を半分にして送り直す（拒否された塊は適用されて
+    ///   いない）。1 ノードの塊でも拒否されたら失敗にする。
+    /// - 空の並びは送らずに空の結果を返す。
+    /// - `nsu=` の URI が NamespaceArray に無いノードは、送らずに `BadNodeIdUnknown`。
+    ///
+    /// 接続ごとの失敗（切断、時間切れ、要求ごとの拒否、応答の不一致）では
+    /// [`WriteFailure`] を返す。先に送った塊は機器に届いているので、ノードごとの結末
+    /// （[`WriteOutcome`]）を要求の順に持たせる。自動再接続のとき、塊を送る前に
+    /// 張り直していたらその塊から先は送らず、応答の後に張り直していたら（古い名前空間
+    /// 番号で送った可能性がある）その塊を結果不明にする。
+    pub async fn write_batch(
+        &self,
+        writes: &[(NodeAddress, ScalarValue)],
+    ) -> Result<Vec<StatusCode>, WriteFailure> {
+        if writes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let info = self
+            .server_info()
+            .await
+            .map_err(|error| WriteFailure::nothing_sent(error, writes.len()))?;
+        let mut statuses: Vec<Option<StatusCode>> = vec![None; writes.len()];
+        let mut positions = Vec::with_capacity(writes.len());
+        let mut requests = Vec::with_capacity(writes.len());
+        for (position, (address, value)) in writes.iter().enumerate() {
+            match address.resolve(&info.namespace_array) {
+                Some(node_id) => {
+                    positions.push(position);
+                    requests.push(WriteValue {
+                        node_id: ua_node_id(&node_id),
+                        attribute_id: AttributeId::Value as u32,
+                        index_range: Default::default(),
+                        value: DataValue {
+                            value: Some(variant_from_scalar(value)),
+                            ..Default::default()
+                        },
+                    });
+                }
+                None => statuses[position] = Some(StatusCode::BAD_NODE_ID_UNKNOWN),
+            }
+        }
+
+        let generation = info.generation;
+        let mut chunk_size = info.max_nodes_per_write.load(Ordering::Relaxed);
+        let result = send_in_chunks(
+            &requests,
+            &mut chunk_size,
+            ChunkWriteFailure::is_too_many_operations,
+            |chunk| async move {
+                if !self.on_connection(generation) {
+                    return Err(ChunkWriteFailure::NotSent);
+                }
+                let chunk_len = chunk.len();
+                let request = WriteRequest {
+                    request_header: services::Write::new(&self.session).header().clone(),
+                    nodes_to_write: Some(chunk),
+                };
+                let response = self
+                    .session
+                    .channel()
+                    .send(request, self.config.request_timeout)
+                    .await;
+                let results = classify_response(response, chunk_len)?;
+                if !self.on_connection(generation) {
+                    return Err(ChunkWriteFailure::Unknown(
+                        StatusCode::BAD_CONNECTION_CLOSED,
+                    ));
+                }
+                Ok(results)
+            },
+        )
+        .await;
+        info.max_nodes_per_write
+            .store(chunk_size, Ordering::Relaxed);
+
+        // 送ったノードの結末を、要求の順の位置へ戻す。送らずに決めたノードは
+        // Completed（BadNodeIdUnknown）。
+        let place = |sent: Vec<WriteOutcome>| -> Vec<WriteOutcome> {
+            let mut outcomes: Vec<_> = statuses
+                .iter()
+                .map(|status| status.map_or(WriteOutcome::NotSent, WriteOutcome::Completed))
+                .collect();
+            for (position, outcome) in positions.iter().zip(sent) {
+                outcomes[*position] = outcome;
+            }
+            outcomes
+        };
+        match result {
+            Ok(results) => {
+                // 要求を 1 つも送らなかったときも、解決に使った NamespaceArray が
+                // まだその接続のものかを確かめる。
+                if !self.on_connection(generation) {
+                    let sent = results
+                        .into_iter()
+                        .map(|status| WriteOutcome::Completed(core_status_code(status)))
+                        .collect();
+                    let mut outcomes = place(sent);
+                    for (outcome, status) in outcomes.iter_mut().zip(&statuses) {
+                        if status.is_some() {
+                            *outcome = WriteOutcome::NotSent;
+                        }
+                    }
+                    return Err(WriteFailure {
+                        error: Error::Disconnected,
+                        outcomes,
+                    });
+                }
+                for (position, status) in positions.into_iter().zip(results) {
+                    statuses[position] = Some(core_status_code(status));
+                }
+                Ok(statuses.into_iter().flatten().collect())
+            }
+            Err(error) => {
+                let (sent, failure) = outcomes_of(error, requests.len());
+                Err(WriteFailure {
+                    error: error_of(failure),
+                    outcomes: place(sent),
+                })
+            }
+        }
     }
 
     /// `ServerStatus/State` を読む。OPC UA では Running が 0。

@@ -75,6 +75,14 @@ mod tests {
         assert_eq!(Core::BAD_INTERNAL_ERROR.code(), Ua::BadInternalError.bits());
         assert_eq!(Core::BAD_NOT_SUPPORTED.code(), Ua::BadNotSupported.bits());
         assert_eq!(
+            Core::BAD_UNKNOWN_RESPONSE.code(),
+            Ua::BadUnknownResponse.bits()
+        );
+        assert_eq!(
+            Core::BAD_CONNECTION_CLOSED.code(),
+            Ua::BadConnectionClosed.bits()
+        );
+        assert_eq!(
             Core::BAD_TOO_MANY_OPERATIONS.code(),
             Ua::BadTooManyOperations.bits()
         );
