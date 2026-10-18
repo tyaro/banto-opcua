@@ -1,9 +1,10 @@
 //! `ClientBuilder` で None / Anonymous のセッションを張り、まとめて読み書きする（ADR-0005）。
+//! 購読モードでは、購読で受けた最新値を持つ（ADR-0006）。
 
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -13,11 +14,12 @@ use futures_util::StreamExt;
 use opcua::{
     client::{
         Client, ClientBuilder, IdentityToken, Session, SessionEventLoop, SessionPollResult,
-        services, transport::TcpConnector,
+        SubscriptionActivity, SubscriptionCallbacks, services, transport::TcpConnector,
     },
     crypto::SecurityPolicy,
     types::{
-        AttributeId, DataValue, MessageSecurityMode, NodeId as UaNodeId, ReadValueId,
+        AttributeId, DataValue, ExtensionObject, MessageSecurityMode, MonitoredItemCreateRequest,
+        MonitoringMode, MonitoringParameters, NodeId as UaNodeId, ReadValueId,
         StatusCode as UaStatusCode, TimestampsToReturn, UserTokenPolicy, VariableId, Variant,
         WriteRequest, WriteValue,
     },
@@ -28,6 +30,7 @@ use crate::{
     ClientConfig, Error, NodeReading, ReconnectPolicy, WriteFailure, WriteOutcome,
     chunk::{ChunkFailure, send_in_chunks},
     convert::{core_status_code, ua_node_id, variant_from_scalar},
+    subscribe::{PublishSignals, Slot, Table},
     write::{ChunkWriteFailure, classify_response, error_of, outcomes_of},
 };
 
@@ -74,7 +77,10 @@ impl OpcUaClient {
             .verify_server_certs(false)
             .request_timeout(config.request_timeout)
             .keep_alive_interval(config.keep_alive_interval)
-            .max_failed_keep_alive_count(config.max_failed_keep_alive_count.get());
+            .max_failed_keep_alive_count(config.max_failed_keep_alive_count.get())
+            // 張り直した後の購読は部品が作り直す（ADR-0006）。async-opcua の作り直しは
+            // 古い名前空間の番号をそのまま使い、作った購読もこちらでは追えない。
+            .recreate_subscriptions(false);
         let builder = match config.reconnect {
             ReconnectPolicy::Disabled => builder.session_retry_limit(0),
             ReconnectPolicy::Automatic {
@@ -113,7 +119,8 @@ impl OpcUaClient {
         let (link_tx, mut link) = watch::channel(Link::Connecting);
         // 時間切れや未接続で抜けると、このガードの Drop がタスクを abort する。
         // 成功したときだけ disarm して ConnectedClient へ所有権を渡す。
-        let task = AbortOnDrop::new(tokio::spawn(drive(event_loop, link_tx)));
+        let signals = Arc::new(PublishSignals::default());
+        let task = AbortOnDrop::new(tokio::spawn(drive(event_loop, link_tx, signals.clone())));
         let established = tokio::time::timeout(
             config.connect_timeout,
             link.wait_for(|state| !matches!(state, Link::Connecting)),
@@ -145,6 +152,10 @@ impl OpcUaClient {
             link,
             info: tokio::sync::Mutex::new(Arc::new(info)),
             config,
+            table: Arc::default(),
+            signals,
+            monitored: tokio::sync::Mutex::new(None),
+            registrations: AtomicU64::new(0),
             task: Some(task.disarm()),
             _client: client,
             _pki: pki,
@@ -165,8 +176,12 @@ enum Link {
     Closed(Option<StatusCode>),
 }
 
-/// イベントループを回し、接続と切断を `link` へ知らせる。
-async fn drive(event_loop: SessionEventLoop<TcpConnector>, link: watch::Sender<Link>) {
+/// イベントループを回し、接続と切断を `link` へ、Publish の失敗を `signals` へ知らせる。
+async fn drive(
+    event_loop: SessionEventLoop<TcpConnector>,
+    link: watch::Sender<Link>,
+    signals: Arc<PublishSignals>,
+) {
     let events = event_loop.enter();
     let mut events = std::pin::pin!(events);
     let mut generation = 0;
@@ -179,6 +194,9 @@ async fn drive(event_loop: SessionEventLoop<TcpConnector>, link: watch::Sender<L
             Some(Ok(SessionPollResult::ConnectionLost(_))) => {
                 link.send_replace(Link::Reconnecting);
             }
+            Some(Ok(SessionPollResult::Subscription(SubscriptionActivity::PublishFailed(
+                status,
+            )))) => signals.on_publish_failed(status),
             Some(Ok(_)) => {}
             Some(Err(status)) => {
                 link.send_replace(Link::Closed(Some(core_status_code(status))));
@@ -202,6 +220,8 @@ struct ServerInfo {
     max_nodes_per_read: AtomicUsize,
     /// 1 回の Write に入れるノード数。`BadTooManyOperations` で小さくする。
     max_nodes_per_write: AtomicUsize,
+    /// 1 回の CreateMonitoredItems に入れるノード数。`BadTooManyOperations` で小さくする。
+    max_monitored_items_per_call: AtomicUsize,
     /// `namespace_array` を読んだセッションの認証トークン。Write はこのトークンで送り、
     /// 別のセッション（名前空間の番号が違うかもしれない）では適用させない。
     auth_token: UaNodeId,
@@ -217,6 +237,7 @@ impl ServerInfo {
             VariableId::Server_NamespaceArray,
             VariableId::Server_ServerCapabilities_OperationLimits_MaxNodesPerRead,
             VariableId::Server_ServerCapabilities_OperationLimits_MaxNodesPerWrite,
+            VariableId::Server_ServerCapabilities_OperationLimits_MaxMonitoredItemsPerCall,
         ]
         .map(|id| ReadValueId::from(UaNodeId::from(id)));
         // Read の前後で認証トークンが同じなら、NamespaceArray はそのセッションで読んだもの。
@@ -236,9 +257,13 @@ impl ServerInfo {
                 describe_failure(err.failure)
             )
         })?;
-        let [namespace_array, max_nodes_per_read, max_nodes_per_write] =
-            <[DataValue; 3]>::try_from(values)
-                .map_err(|_| "サーバーの情報の応答の数が要求と合いません".to_owned())?;
+        let [
+            namespace_array,
+            max_nodes_per_read,
+            max_nodes_per_write,
+            max_monitored_items_per_call,
+        ] = <[DataValue; 4]>::try_from(values)
+            .map_err(|_| "サーバーの情報の応答の数が要求と合いません".to_owned())?;
         if current_auth_token(session) != auth_token {
             return Err("サーバーの情報を読んでいる間にセッションが変わりました".to_owned());
         }
@@ -251,6 +276,14 @@ impl ServerInfo {
             max_nodes_per_write: AtomicUsize::new(
                 limit_from(max_nodes_per_write).unwrap_or(config.default_max_nodes_per_write.get()),
             ),
+            max_monitored_items_per_call: AtomicUsize::new(
+                limit_from(max_monitored_items_per_call).unwrap_or(
+                    config
+                        .subscription
+                        .default_max_monitored_items_per_call
+                        .get(),
+                ),
+            ),
             auth_token,
         })
     }
@@ -262,6 +295,11 @@ fn current_auth_token(session: &Session) -> UaNodeId {
         .header()
         .authentication_token
         .clone()
+}
+
+/// 表のロックが壊れている（コールバックが panic した）。
+fn poisoned<T>(_: std::sync::PoisonError<T>) -> Error {
+    Error::Subscribe("購読の最新値の表を読めません".to_owned())
 }
 
 /// サービス全体の拒否のうち、塊を小さくすれば通るもの。
@@ -346,6 +384,15 @@ impl<T> Drop for AbortOnDrop<T> {
     }
 }
 
+/// 購読モードで登録したノードと、それを監視している購読。
+#[derive(Debug)]
+struct Monitored {
+    addresses: Vec<NodeAddress>,
+    subscription_id: u32,
+    /// 購読を作った接続の世代。張り直した後は作り直す。
+    generation: u64,
+}
+
 /// 接続済みのセッション。
 ///
 /// [`ReconnectPolicy::Disabled`]（既定）では、接続が切れると以降の呼び出しは
@@ -359,6 +406,13 @@ pub struct ConnectedClient {
     link: watch::Receiver<Link>,
     info: tokio::sync::Mutex<Arc<ServerInfo>>,
     config: ClientConfig,
+    /// 購読モードの最新値の表。通知のコールバックも書き込む。
+    table: Arc<std::sync::Mutex<Table>>,
+    signals: Arc<PublishSignals>,
+    /// 購読モードで登録したノードと、その購読。
+    monitored: tokio::sync::Mutex<Option<Monitored>>,
+    /// 購読を作るたびに増える登録の番号。
+    registrations: AtomicU64,
     task: Option<JoinHandle<()>>,
     _client: Client,
     _pki: tempfile::TempDir,
@@ -604,6 +658,260 @@ impl ConnectedClient {
                 })
             }
         }
+    }
+
+    /// 購読モード（ADR-0006）: ノードの並びを登録し、購読を作り直して監視する。
+    ///
+    /// ノードごとの MonitoredItem の作成の StatusCode を登録した順に返す。前の登録は
+    /// 新しい購読ができてから消す。新しい購読を作れなかったときは前の登録を残し、
+    /// 次の [`Self::latest`] で前の並びから作り直す。
+    /// - `nsu=` の URI が NamespaceArray に無いノードは、作らずに `BadNodeIdUnknown`。
+    /// - 購読に入れられる数を超えたノードは `BadTooManyMonitoredItems`。
+    /// - 作成に失敗したノードは、登録し直すまで [`Self::latest`] でもその StatusCode を返す。
+    ///
+    /// 接続ごとの失敗（切断、購読やサービス全体のエラー）は `Err`。
+    pub async fn monitor(&self, nodes: &[NodeAddress]) -> Result<Vec<StatusCode>, Error> {
+        let info = self.server_info().await?;
+        let mut monitored = self.monitored.lock().await;
+        if let Some(previous) = monitored.as_mut()
+            && previous.generation != info.generation
+        {
+            // 張り直した後は、新しい購読が古い購読と同じ ID になりうる（latest と同じ）。
+            self.forget_subscription(previous).await;
+        }
+        let (subscription_id, statuses) = match self.subscribe(&info, nodes, None).await {
+            Ok(created) => created,
+            Err(error) => {
+                // 前の登録は残す。表はもう新しい登録に替わっているので、次の latest で
+                // 前の並びから作り直すよう、世代を合わなくしておく。
+                if let Some(previous) = monitored.as_mut() {
+                    previous.generation = 0;
+                }
+                return Err(error);
+            }
+        };
+        if let Some(mut previous) = monitored.take() {
+            self.forget_subscription(&mut previous).await;
+        }
+        *monitored = Some(Monitored {
+            addresses: nodes.to_vec(),
+            subscription_id,
+            generation: info.generation,
+        });
+        // 作っている間に張り直していたら、古い名前空間の番号で作ったかもしれない。
+        // 作成の結果は当てにならないので失敗にし、次の latest で作り直す。
+        if !self.on_connection(info.generation) {
+            return Err(Error::Disconnected);
+        }
+        Ok(statuses)
+    }
+
+    /// 購読モード（ADR-0006）: 登録した順に、ノードごとの最新の値・StatusCode・
+    /// SourceTimestamp を返す。
+    ///
+    /// - まだ最初の通知が届いていないノードは、値なし・`BadWaitingForInitialData`。
+    /// - 登録していなければ空の並び。
+    /// - Publish が失敗していた（通知を落としたかもしれない）ときは、同じ接続のまま
+    ///   購読を作り直してから返す。作り直している間に返すのはそれまでの値で、新しい購読の
+    ///   最初の通知で最新になる。
+    /// - 購読を失った（サーバーが捨てた、`BadNoSubscription`）ときは、自動再接続が無ければ
+    ///   `Err`（呼び出し側が張り直す）。自動再接続なら作り直す。
+    /// - 自動再接続で張り直した後は、NamespaceArray を読み直して購読を作り直す。
+    ///
+    /// `Err` は `read_batch` と同じく接続ごとの失敗。
+    pub async fn latest(&self) -> Result<Vec<NodeReading>, Error> {
+        let Link::Connected(generation) = *self.link.borrow() else {
+            return Err(Error::Disconnected);
+        };
+        let mut monitored = self.monitored.lock().await;
+        let Some(current) = monitored.as_mut() else {
+            return Ok(Vec::new());
+        };
+        let lost = self.signals.lost() || self.table.lock().map_err(poisoned)?.lost;
+        let reconnected = current.generation != generation;
+        if lost && !reconnected && self.config.reconnect == ReconnectPolicy::Disabled {
+            return Err(Error::Subscribe(
+                "サーバーの購読が失われました。接続し直してください".to_owned(),
+            ));
+        }
+        if reconnected || lost || self.signals.failed() {
+            let info = self.server_info().await?;
+            // 同じ接続で通知を落としただけなら、それまでの値を引き継ぐ。
+            let carried = (!reconnected && !lost)
+                .then(|| self.table.lock().map(|table| table.readings()))
+                .transpose()
+                .map_err(poisoned)?;
+            if reconnected {
+                // 張り直した先のサーバーは、購読の ID を 1 から振り直すことがある。新しい
+                // 購読が古い購読と同じ ID になりうるので、古い購読のクライアントの状態を
+                // 先に消す（サーバーには無いので Bad が返る）。
+                self.forget_subscription(current).await;
+            }
+            match self.subscribe(&info, &current.addresses, carried).await {
+                Ok((subscription_id, _)) => {
+                    // 同じ接続の中では ID は重ならないので、新しい購読ができてから消す
+                    // （あいだに購読が無くなって BadNoSubscription にならないように）。
+                    self.forget_subscription(current).await;
+                    current.subscription_id = subscription_id;
+                    current.generation = info.generation;
+                }
+                Err(error) => {
+                    // 表はもう新しい登録に替わっていて、古い購読の通知を受けない。
+                    // 次の呼び出しで必ず作り直すよう、世代を合わなくしておく。
+                    current.generation = 0;
+                    return Err(error);
+                }
+            }
+            if !self.on_connection(info.generation) {
+                return Err(Error::Disconnected);
+            }
+        }
+        Ok(self.table.lock().map_err(poisoned)?.readings())
+    }
+
+    /// 登録の購読を消し、ID を忘れる。もう消してあれば何もしない。
+    async fn forget_subscription(&self, monitored: &mut Monitored) {
+        if monitored.subscription_id != 0 {
+            let _ = self
+                .session
+                .delete_subscription(monitored.subscription_id)
+                .await;
+            monitored.subscription_id = 0;
+        }
+    }
+
+    /// 新しい登録の番号で表を入れ替え、購読と MonitoredItem を作る。購読の ID と、
+    /// ノードごとの作成の StatusCode を返す。
+    ///
+    /// `carried` は、作成に成功する行が引き継ぐそれまでの値（登録した順）。
+    async fn subscribe(
+        &self,
+        info: &ServerInfo,
+        addresses: &[NodeAddress],
+        carried: Option<Vec<NodeReading>>,
+    ) -> Result<(u32, Vec<StatusCode>), Error> {
+        let registration = self.registrations.fetch_add(1, Ordering::SeqCst) + 1;
+        let settings = &self.config.subscription;
+        let mut statuses = vec![StatusCode::GOOD; addresses.len()];
+        let mut slots = Vec::with_capacity(addresses.len());
+        let mut positions = Vec::with_capacity(addresses.len());
+        let mut requests = Vec::with_capacity(addresses.len());
+        for (position, address) in addresses.iter().enumerate() {
+            let Some(node_id) = address.resolve(&info.namespace_array) else {
+                statuses[position] = StatusCode::BAD_NODE_ID_UNKNOWN;
+                slots.push(Slot::failed(StatusCode::BAD_NODE_ID_UNKNOWN));
+                continue;
+            };
+            let carried = carried
+                .as_ref()
+                .and_then(|readings| readings.get(position).cloned());
+            slots.push(Slot::monitoring(carried));
+            positions.push(position);
+            requests.push(MonitoredItemCreateRequest {
+                item_to_monitor: ReadValueId {
+                    node_id: ua_node_id(&node_id),
+                    attribute_id: AttributeId::Value as u32,
+                    ..Default::default()
+                },
+                monitoring_mode: MonitoringMode::Reporting,
+                requested_parameters: MonitoringParameters {
+                    client_handle: u32::try_from(position + 1).unwrap_or(u32::MAX),
+                    sampling_interval: settings.sampling_interval.as_secs_f64() * 1000.0,
+                    filter: ExtensionObject::null(),
+                    queue_size: 1,
+                    discard_oldest: true,
+                },
+            });
+        }
+        // 通知は作成の応答より先に届くことがあるので、作る前に表を入れ替える。
+        self.signals.clear();
+        self.table
+            .lock()
+            .map_err(poisoned)?
+            .replace(registration, slots);
+
+        let on_status = Arc::clone(&self.table);
+        let on_value = Arc::clone(&self.table);
+        let callbacks = SubscriptionCallbacks::new(
+            move |notification| {
+                if notification.status.is_bad()
+                    && let Ok(mut table) = on_status.lock()
+                {
+                    table.mark_lost(registration);
+                }
+            },
+            move |value, item| {
+                if let Ok(mut table) = on_value.lock() {
+                    table.apply(registration, item.client_handle(), value);
+                }
+            },
+            |_, _| {},
+        );
+        let subscription_id = self
+            .session
+            .create_subscription(
+                settings.publishing_interval,
+                settings.lifetime_count,
+                settings.max_keep_alive_count,
+                0,
+                0,
+                true,
+                callbacks,
+            )
+            .await
+            .map_err(|err| Error::Subscribe(format!("購読を作れませんでした: {err}")))?;
+
+        let mut chunk_size = info.max_monitored_items_per_call.load(Ordering::Relaxed);
+        let result = send_in_chunks(
+            &requests,
+            &mut chunk_size,
+            is_too_many_operations,
+            |chunk| async move {
+                self.session
+                    .create_monitored_items(subscription_id, TimestampsToReturn::Source, chunk)
+                    .await
+            },
+        )
+        .await;
+        info.max_monitored_items_per_call
+            .store(chunk_size, Ordering::Relaxed);
+        let created: Vec<StatusCode> = match result {
+            Ok(items) => items
+                .iter()
+                .map(|item| core_status_code(item.result.status_code))
+                .collect(),
+            // 購読に入れられる数を超えた塊からあとは作られていない。作れた分は監視する。
+            Err(err)
+                if matches!(
+                    &err.failure,
+                    ChunkFailure::Request { error, .. }
+                        if error.status() == UaStatusCode::BadTooManyMonitoredItems
+                ) =>
+            {
+                let mut created: Vec<_> = err
+                    .done
+                    .iter()
+                    .map(|item| core_status_code(item.result.status_code))
+                    .collect();
+                created.resize(requests.len(), StatusCode::BAD_TOO_MANY_MONITORED_ITEMS);
+                created
+            }
+            Err(err) => {
+                let _ = self.session.delete_subscription(subscription_id).await;
+                return Err(Error::Subscribe(format!(
+                    "MonitoredItem を作れませんでした: {}",
+                    describe_failure(err.failure)
+                )));
+            }
+        };
+        {
+            let mut table = self.table.lock().map_err(poisoned)?;
+            for (position, status) in positions.into_iter().zip(created) {
+                table.set_created(registration, position, status);
+                statuses[position] = status;
+            }
+        }
+        Ok((subscription_id, statuses))
     }
 
     /// `ServerStatus/State` を読む。OPC UA では Running が 0。

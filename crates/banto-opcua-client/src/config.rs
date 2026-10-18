@@ -33,6 +33,81 @@ pub enum ReconnectPolicy {
     },
 }
 
+/// 購読モードの設定（ADR-0006）。周期 Read だけを使う接続では使わない。
+///
+/// キューの大きさは 1（あふれたら古い方を捨てる）、データ変化のフィルタは付けない
+/// （サーバーの既定の StatusValue）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SubscriptionSettings {
+    /// Publish の間隔。既定は 1 秒。サーバーが直した値になることがある。
+    pub publishing_interval: Duration,
+    /// 各ノードを採取する間隔。既定は 500 ミリ秒。
+    pub sampling_interval: Duration,
+    /// 通知が無いときに keep-alive を返すまでの Publish の回数。既定は 10。
+    pub max_keep_alive_count: u32,
+    /// Publish が来ないときに、サーバーが購読を捨てるまでの Publish の回数。既定は 30。
+    /// `max_keep_alive_count` の 3 倍以上にする（Part 4）。
+    pub lifetime_count: u32,
+    /// サーバーが `MaxMonitoredItemsPerCall` を広告しないときに、1 回の
+    /// CreateMonitoredItems へ入れるノード数。既定は 100。
+    pub default_max_monitored_items_per_call: NonZeroUsize,
+}
+
+impl Default for SubscriptionSettings {
+    fn default() -> Self {
+        Self {
+            publishing_interval: Duration::from_secs(1),
+            sampling_interval: Duration::from_millis(500),
+            max_keep_alive_count: 10,
+            lifetime_count: 30,
+            default_max_monitored_items_per_call: NonZeroUsize::new(100).unwrap(),
+        }
+    }
+}
+
+impl SubscriptionSettings {
+    /// Publish の間隔を設定する。
+    pub fn with_publishing_interval(mut self, interval: Duration) -> Self {
+        self.publishing_interval = interval;
+        self
+    }
+
+    /// 採取の間隔を設定する。
+    pub fn with_sampling_interval(mut self, interval: Duration) -> Self {
+        self.sampling_interval = interval;
+        self
+    }
+
+    /// keep-alive と lifetime の回数を設定する。
+    pub fn with_counts(mut self, max_keep_alive_count: u32, lifetime_count: u32) -> Self {
+        self.max_keep_alive_count = max_keep_alive_count;
+        self.lifetime_count = lifetime_count;
+        self
+    }
+
+    /// サーバーが上限を広告しないときの、1 回の CreateMonitoredItems のノード数を設定する。
+    pub fn with_default_max_monitored_items_per_call(mut self, max: NonZeroUsize) -> Self {
+        self.default_max_monitored_items_per_call = max;
+        self
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.publishing_interval.is_zero() {
+            return Err("publishing_interval に 0 は指定できません".to_owned());
+        }
+        if self.max_keep_alive_count == 0 {
+            return Err("max_keep_alive_count に 0 は指定できません".to_owned());
+        }
+        if u64::from(self.lifetime_count) < 3 * u64::from(self.max_keep_alive_count) {
+            return Err(
+                "lifetime_count は max_keep_alive_count の 3 倍以上にしてください".to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
 /// 接続先と時間切れ、要求の分割の設定。
 ///
 /// 外部クレートでは [`ClientConfig::new`] と `with_*` メソッドで生成する。
@@ -67,6 +142,8 @@ pub struct ClientConfig {
     pub default_max_nodes_per_write: NonZeroUsize,
     /// 接続が切れたときに張り直すか。既定は [`ReconnectPolicy::Disabled`]。
     pub reconnect: ReconnectPolicy,
+    /// 購読モード（[`crate::ConnectedClient::monitor`]）の設定。
+    pub subscription: SubscriptionSettings,
 }
 
 const DEFAULT_MAX_NODES_PER_READ: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -85,6 +162,7 @@ impl ClientConfig {
             default_max_nodes_per_read: DEFAULT_MAX_NODES_PER_READ,
             default_max_nodes_per_write: DEFAULT_MAX_NODES_PER_WRITE,
             reconnect: ReconnectPolicy::Disabled,
+            subscription: SubscriptionSettings::default(),
         }
     }
 
@@ -130,6 +208,12 @@ impl ClientConfig {
         self
     }
 
+    /// 購読モードの設定を変える。
+    pub fn with_subscription(mut self, subscription: SubscriptionSettings) -> Self {
+        self.subscription = subscription;
+        self
+    }
+
     /// 0 の時間を拒否する。async-opcua では 0 が「待たない」や「送らない」になる。
     pub(crate) fn validate(&self) -> Result<(), String> {
         let mut durations = vec![
@@ -148,6 +232,7 @@ impl ClientConfig {
             }
             durations.extend([("initial_delay", initial_delay), ("max_delay", max_delay)]);
         }
+        self.subscription.validate()?;
         for (name, duration) in durations {
             if duration.is_zero() {
                 return Err(format!("{name} に 0 は指定できません"));
@@ -193,6 +278,31 @@ mod tests {
             automatic(Duration::from_secs(2), Duration::from_secs(1))
                 .validate()
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn subscription_settings_need_a_long_enough_lifetime() {
+        let config = ClientConfig::new("opc.tcp://127.0.0.1:4840/");
+        assert_eq!(config.validate(), Ok(()));
+        for invalid in [
+            SubscriptionSettings::default().with_publishing_interval(Duration::ZERO),
+            SubscriptionSettings::default().with_counts(0, 30),
+            SubscriptionSettings::default().with_counts(10, 29),
+        ] {
+            assert!(
+                config
+                    .clone()
+                    .with_subscription(invalid)
+                    .validate()
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            config
+                .with_subscription(SubscriptionSettings::default().with_counts(1, 3))
+                .validate(),
+            Ok(())
         );
     }
 
