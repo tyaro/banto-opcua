@@ -21,6 +21,19 @@ pub struct NodeReading {
 }
 
 impl NodeReading {
+    /// 結果を組み立てる。呼び出し側の試験で、部品を通さずに結果を作るときに使う。
+    pub const fn new(
+        value: Option<ScalarValue>,
+        status: StatusCode,
+        source_timestamp: Option<SystemTime>,
+    ) -> Self {
+        Self {
+            value,
+            status,
+            source_timestamp,
+        }
+    }
+
     /// 送らずに結果を決めたノード。
     pub(crate) const fn without_value(status: StatusCode) -> Self {
         Self {

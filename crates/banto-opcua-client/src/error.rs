@@ -3,6 +3,7 @@
 /// [`crate::ConnectedClient::read_batch`] の `Err` はどれも接続ごとの失敗
 /// （ノード単位の失敗は結果の StatusCode）。
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// サンプル証明書を置く一時ディレクトリを作れなかった。
     #[error("OPC UA クライアントの一時ディレクトリを用意できませんでした: {0}")]

@@ -121,10 +121,23 @@ impl OpcUaClient {
         .map(|state| *state);
         let generation = match established {
             Ok(Link::Connected(generation)) => generation,
+            Ok(Link::Closed(Some(status))) => {
+                return Err(Error::Connect(format!(
+                    "セッションが確立しませんでした: {status}"
+                )));
+            }
             _ => return Err(Error::Connect("セッションが確立しませんでした".to_owned())),
         };
 
-        let info = ServerInfo::read(&session, generation, &config).await?;
+        let info = match ServerInfo::read(&session, generation, &config).await {
+            Ok(info) => info,
+            Err(reason) => {
+                // セッションを閉じてから返す。abort だけだとサーバーに
+                // セッションの時間切れまで残る。
+                let _ = tokio::time::timeout(config.request_timeout, session.disconnect()).await;
+                return Err(Error::Connect(reason));
+            }
+        };
         Ok(ConnectedClient {
             session,
             link,
@@ -146,8 +159,8 @@ enum Link {
     Connected(u64),
     /// 切れて、自動再接続で張り直している。
     Reconnecting,
-    /// イベントループが終わった。以降は接続しない。
-    Closed,
+    /// イベントループが終わった。以降は接続しない。諦めた理由があれば持つ。
+    Closed(Option<StatusCode>),
 }
 
 /// イベントループを回し、接続と切断を `link` へ知らせる。
@@ -165,8 +178,12 @@ async fn drive(event_loop: SessionEventLoop<TcpConnector>, link: watch::Sender<L
                 link.send_replace(Link::Reconnecting);
             }
             Some(Ok(_)) => {}
-            Some(Err(_)) | None => {
-                link.send_replace(Link::Closed);
+            Some(Err(status)) => {
+                link.send_replace(Link::Closed(Some(core_status_code(status))));
+                return;
+            }
+            None => {
+                link.send_replace(Link::Closed(None));
                 return;
             }
         }
@@ -188,23 +205,29 @@ impl ServerInfo {
         session: &Session,
         generation: u64,
         config: &ClientConfig,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, String> {
         let nodes = [
             VariableId::Server_NamespaceArray,
             VariableId::Server_ServerCapabilities_OperationLimits_MaxNodesPerRead,
         ]
         .map(|id| ReadValueId::from(UaNodeId::from(id)));
-        let values = session
-            .read(&nodes, TimestampsToReturn::Neither, 0.0)
-            .await
-            .map_err(|err| Error::Connect(format!("サーバーの情報を読めませんでした: {err}")))?;
-        let [namespace_array, max_nodes_per_read] =
-            <[DataValue; 2]>::try_from(values).map_err(|values| {
-                Error::Connect(format!(
-                    "サーバーの情報の応答の数が要求と合いません: {} 件",
-                    values.len()
-                ))
-            })?;
+        // 上限を知る前の Read なので、MaxNodesPerRead が 1 のサーバーにも分けて送る。
+        let mut chunk_size = nodes.len();
+        let values = send_in_chunks(
+            &nodes,
+            &mut chunk_size,
+            is_too_many_operations,
+            |chunk| async move { session.read(&chunk, TimestampsToReturn::Neither, 0.0).await },
+        )
+        .await
+        .map_err(|err| {
+            format!(
+                "サーバーの情報を読めませんでした: {}",
+                describe_failure(err.failure)
+            )
+        })?;
+        let [namespace_array, max_nodes_per_read] = <[DataValue; 2]>::try_from(values)
+            .map_err(|_| "サーバーの情報の応答の数が要求と合いません".to_owned())?;
         Ok(Self {
             generation,
             namespace_array: namespace_array_from(namespace_array),
@@ -213,6 +236,31 @@ impl ServerInfo {
             ),
         })
     }
+}
+
+/// サービス全体の拒否のうち、塊を小さくすれば通るもの。
+fn is_too_many_operations(error: &opcua::types::Error) -> bool {
+    error.status() == UaStatusCode::BadTooManyOperations
+}
+
+fn describe_failure(failure: ChunkFailure<opcua::types::Error>) -> String {
+    match failure {
+        ChunkFailure::Request { error, .. } => {
+            format!("{}: {error}", core_status_code(error.status()))
+        }
+        ChunkFailure::CountMismatch { expected, actual } => {
+            format!("応答の結果の数が要求と合いません（要求 {expected} 件、結果 {actual} 件）")
+        }
+    }
+}
+
+/// [`ConnectedClient::read_batch`] の塊が失敗した理由。
+#[derive(Debug)]
+enum ReadFailure {
+    /// Read サービスが失敗した。
+    Service(opcua::types::Error),
+    /// 塊を送る前か応答を受け取った後に、接続が張り直されていた。
+    Reconnected,
 }
 
 /// 値が String の配列でなければ空にする。`nsu=` のノードはノード単位の `BadNodeIdUnknown` になる。
@@ -291,6 +339,11 @@ pub struct ConnectedClient {
 }
 
 impl ConnectedClient {
+    /// まだ `generation` の接続のままか。
+    fn on_connection(&self, generation: u64) -> bool {
+        *self.link.borrow() == Link::Connected(generation)
+    }
+
     /// 接続していれば、その接続で読んだサーバーの情報を返す。張り直した後なら読み直す。
     async fn server_info(&self) -> Result<Arc<ServerInfo>, Error> {
         let Link::Connected(generation) = *self.link.borrow() else {
@@ -298,7 +351,11 @@ impl ConnectedClient {
         };
         let mut info = self.info.lock().await;
         if info.generation != generation {
-            *info = Arc::new(ServerInfo::read(&self.session, generation, &self.config).await?);
+            *info = Arc::new(
+                ServerInfo::read(&self.session, generation, &self.config)
+                    .await
+                    .map_err(Error::Read)?,
+            );
         }
         Ok(Arc::clone(&info))
     }
@@ -312,6 +369,9 @@ impl ConnectedClient {
     /// - `nsu=` の URI が NamespaceArray に無いノードは、送らずに `BadNodeIdUnknown`。
     /// - 切断、時間切れ、サービス全体のエラー、応答の数の不一致は `Err`（接続ごとの
     ///   失敗）。ノード単位の失敗は結果の [`NodeReading::status`] にする。
+    /// - 自動再接続のとき、塊を送る前か応答を受け取った後に接続が張り直されていたら、
+    ///   [`Error::Disconnected`] にする。張り直した先では名前空間の番号が変わりうるので、
+    ///   古い番号で解決した要求の結果は返さない。次の呼び出しで解決し直す。
     pub async fn read_batch(&self, nodes: &[NodeAddress]) -> Result<Vec<NodeReading>, Error> {
         if nodes.is_empty() {
             return Ok(Vec::new());
@@ -337,26 +397,44 @@ impl ConnectedClient {
             }
         }
 
+        let generation = info.generation;
         let mut chunk_size = info.max_nodes_per_read.load(Ordering::Relaxed);
         let result = send_in_chunks(
             &requests,
             &mut chunk_size,
-            |err: &opcua::types::Error| err.status() == UaStatusCode::BadTooManyOperations,
+            |failure| matches!(failure, ReadFailure::Service(error) if is_too_many_operations(error)),
             |chunk| async move {
-                self.session
+                if !self.on_connection(generation) {
+                    return Err(ReadFailure::Reconnected);
+                }
+                let values = self
+                    .session
                     .read(&chunk, TimestampsToReturn::Source, 0.0)
                     .await
+                    .map_err(ReadFailure::Service)?;
+                if !self.on_connection(generation) {
+                    return Err(ReadFailure::Reconnected);
+                }
+                Ok(values)
             },
         )
         .await;
         info.max_nodes_per_read.store(chunk_size, Ordering::Relaxed);
         let values = result.map_err(|err| match err.failure {
-            ChunkFailure::Request { error, .. } => {
-                Error::Read(format!("{}: {error}", core_status_code(error.status())))
+            ChunkFailure::Request {
+                error: ReadFailure::Reconnected,
+                ..
+            } => Error::Disconnected,
+            ChunkFailure::Request {
+                error: ReadFailure::Service(error),
+                chunk_len,
+            } => Error::Read(describe_failure(ChunkFailure::Request { error, chunk_len })),
+            ChunkFailure::CountMismatch { expected, actual } => {
+                Error::Read(describe_failure(ChunkFailure::CountMismatch {
+                    expected,
+                    actual,
+                }))
             }
-            ChunkFailure::CountMismatch { expected, actual } => Error::Read(format!(
-                "応答の結果の数が要求と合いません（要求 {expected} 件、結果 {actual} 件）"
-            )),
         })?;
         for (position, value) in positions.into_iter().zip(values) {
             readings[position] = Some(NodeReading::from_data_value(value));
@@ -420,13 +498,16 @@ impl ConnectedClient {
     /// セッションを閉じてイベントループの終了を待つ。
     ///
     /// 接続がすでに切れていれば、閉じる要求は送らずにイベントループを止める。
+    /// 閉じる要求が `request_timeout` の 2 倍で終わらなければ（自動再接続で
+    /// 切断と張り直しが重なったときなど）、イベントループを止めて `Err` を返す。
     pub async fn disconnect(mut self) -> Result<(), Error> {
         let connected = matches!(*self.link.borrow(), Link::Connected(_));
         let result = if connected {
-            self.session
-                .disconnect()
-                .await
-                .map_err(|err| Error::Connect(err.to_string()))
+            let limit = self.config.request_timeout.saturating_mul(2);
+            match tokio::time::timeout(limit, self.session.disconnect()).await {
+                Ok(result) => result.map_err(|err| Error::Connect(err.to_string())),
+                Err(_) => Err(Error::Connect("切断が時間切れになりました".to_owned())),
+            }
         } else {
             Ok(())
         };

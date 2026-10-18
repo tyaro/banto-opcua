@@ -127,6 +127,38 @@ async fn read_is_split_by_the_advertised_max_nodes_per_read() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connects_and_reads_when_the_server_allows_one_node_per_read() {
+    let server = start(
+        ServerConfig::default()
+            .with_port(0)
+            .with_max_nodes_per_read(NonZeroUsize::new(1).unwrap()),
+    )
+    .await;
+    // 接続時の情報の Read（2 ノード）も、上限 1 のサーバーへ分けて送る。
+    let client = connect(ClientConfig::new(server.endpoint())).await;
+
+    let readings = client
+        .read_batch(&[
+            address("i=2259"),
+            address(&format!("nsu={TAGS_URI};s=PLC1.Line1.Running")),
+            address("i=11705"),
+        ])
+        .await
+        .expect("read batch");
+
+    assert_eq!(readings[0].value, Some(ScalarValue::Int32(0)));
+    assert_eq!(
+        readings[1].value,
+        Some(ScalarValue::Boolean(false)),
+        "nsu= を解決できる"
+    );
+    assert_eq!(readings[2].value, Some(ScalarValue::UInt32(1)));
+
+    client.disconnect().await.expect("client disconnects");
+    server.shutdown().await.expect("server shuts down");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stopped_server_fails_later_calls_without_reconnecting() {
     let server = start(ServerConfig::default().with_port(0)).await;
     let port = server.local_addr().port();

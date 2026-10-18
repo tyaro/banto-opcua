@@ -16,13 +16,19 @@ pub enum ReconnectPolicy {
     ///
     /// banto の broker の仕様が変わったときのために残す選択肢。張り直している間の
     /// 呼び出しは [`crate::Error::Disconnected`] を返す。張り直した後は
-    /// NamespaceArray と OperationLimits を読み直す。
+    /// NamespaceArray と OperationLimits を読み直す。この設定を使うときは、
+    /// 呼び出し側は同じ接続を張り直さない（二重になる）。
+    ///
+    /// 切れたらすぐに 1 回張り直し、失敗するたびに待ち時間を倍にする。
+    /// `max_retries` を使い切ると諦め、以降の呼び出しは [`ReconnectPolicy::Disabled`] と
+    /// 同じく、すべて [`crate::Error::Disconnected`] を返す。
     Automatic {
-        /// 最初に張り直すまでの待ち時間。
+        /// 張り直しに 1 回失敗した後の、最初の待ち時間。
         initial_delay: Duration,
         /// 待ち時間を倍にしていくときの上限。
         max_delay: Duration,
-        /// 続けて失敗してよい回数。`None` は諦めない。
+        /// 最初の張り直しの後に、続けて失敗してよい回数（`Some(n)` は合わせて n + 1 回
+        /// 試す）。`None` は諦めない。
         max_retries: Option<u32>,
     },
 }
@@ -48,7 +54,10 @@ pub struct ClientConfig {
     pub keep_alive_interval: Duration,
     /// keep-alive が続けて失敗したら接続を閉じる回数。既定は 3。
     ///
-    /// TCP が閉じないまま応答が止まる切断を、これで見つける。
+    /// TCP が閉じないまま応答が止まる切断を、これで見つける。keep-alive の Read も
+    /// [`Self::request_timeout`] まで応答を待つので、見つけるまでの時間はおよそ
+    /// `回数 × max(keep_alive_interval, request_timeout) + request_timeout`
+    /// （既定で 40 秒前後）。
     pub max_failed_keep_alive_count: NonZeroU64,
     /// サーバーが `MaxNodesPerRead` を広告しない（0、ノードが無い、Bad）ときに、
     /// 1 回の Read へ入れるノード数。既定は 100。
