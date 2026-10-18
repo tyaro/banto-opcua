@@ -18,6 +18,7 @@
 ### 変更
 
 - 既存の `OpcUaClient::connect` / `connect_with_session_timeout` も、async-opcua の自動再接続を止めるようになった（以前は 2 回まで張り直した）。
+- `ConnectedClient::read_server_state` / `read_u32` は、接続が切れている（張り直している）ときに `Error::Disconnected` を返すようになった（以前は `Error::Read`）。
 
 ## [0.1.0] - 2026-10-17
 
