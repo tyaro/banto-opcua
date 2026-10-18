@@ -251,7 +251,10 @@ async fn automatic_reconnect_writes_with_the_new_session_and_namespace_array() {
     let statuses = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             match client.write_batch(&writes).await {
-                Ok(statuses) => break statuses,
+                // 切断に気付く前は古い NamespaceArray で解決し、送らずに
+                // BadNodeIdUnknown を返すことがある。GOOD になるまで待つ。
+                Ok(statuses) if statuses == [StatusCode::GOOD] => break statuses,
+                Ok(_) => tokio::time::sleep(Duration::from_millis(200)).await,
                 Err(failure) => {
                     assert!(
                         failure

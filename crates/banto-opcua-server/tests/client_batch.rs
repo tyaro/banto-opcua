@@ -219,7 +219,10 @@ async fn automatic_reconnect_rereads_the_namespace_array() {
     let after = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             match client.read_batch(&renamed).await {
-                Ok(readings) => break readings,
+                // 切断に気付く前は古い NamespaceArray で解決し、送らずに
+                // BadNodeIdUnknown を返すことがある。GOOD になるまで待つ。
+                Ok(readings) if readings[0].status == StatusCode::GOOD => break readings,
+                Ok(_) => tokio::time::sleep(Duration::from_millis(200)).await,
                 Err(ClientError::Disconnected | ClientError::Read(_)) => {
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }
