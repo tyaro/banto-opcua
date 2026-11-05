@@ -8,7 +8,7 @@
 ## [0.2.0] - 2026-11-05
 
 Hub のドライバ向けの OPC UA クライアントの部品（ADR-0005、#33）と、購読モード
-（ADR-0006）を含む。async-opcua の固定を上流の master の上へ移した（#17）。
+（ADR-0006）を含む。async-opcua の固定を上流の master の上へ移した（#50、#17）。
 
 ### 追加
 
@@ -28,6 +28,7 @@ Hub のドライバ向けの OPC UA クライアントの部品（ADR-0005、#33
 ### 変更
 
 - 既存の `OpcUaClient::connect` / `connect_with_session_timeout` も、async-opcua の自動再接続を止めるようになった（以前は 2 回まで張り直した）。
+- クライアントの `Error` を `#[non_exhaustive]` にし、`Disconnected` / `Subscribe` / `Write` を足した。網羅的に `match` していた利用者は、ワイルドカードの腕が要る。
 - `ConnectedClient::read_server_state` / `read_u32` は、接続が切れている（張り直している）ときに `Error::Disconnected` を返すようになった（以前は `Error::Read`）。
 - async-opcua の固定を、fork の修正 3 件を上流の master（`f2265a91`）の上に載せ直し、Republish の番号の控えが同じ ID の新しい購読に残る不具合の修正を重ねた `9daa957` へ移した。上流の再接続後の Publish の再開と、失われた通知の Republish が入る。依存の `serde_yaml` は `yaml_serde` に替わった（ADR-0001、ADR-0006、#17）。
 
