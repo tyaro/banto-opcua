@@ -30,8 +30,12 @@ async-opcua 0.19（fork `9ee772b`）のクライアントの購読について�
   TransferSubscriptions がサーバーに拒否されるので、毎回作り直しになる。
 - 作り直した後、Publish の要求が再開しないことがある（作り直しの中で出す
   `trigger_publish_now` が、後から作られるイベントループの状態に届かない）。
+  2026-11-05 に固定を移した `8d347a4`（ADR-0001）では、上流の `7bed8169` で直っている。
 - Publish の応答が失われても Republish はせず、通知の番号の抜けも見ない。最後の変化を
-  落としたノードは、次に変わるまで古い値のままになる。
+  落としたノードは、次に変わるまで古い値のままになる。2026-11-05 の固定では、上流の
+  `f2265a91` により、同じセッションの中で番号の抜けた通知を、サーバーがまだ持っている
+  間は Republish で取り戻す。サーバーが既に捨てた通知や、Publish の失敗そのものは
+  取り戻せないので、下の「取りこぼしと購読の喪失」の作り直しはそのまま残す。
 - `create_monitored_items` は要求を分けない。async-opcua のサーバーは 1 回の要求に
   1000 ノード（`MaxMonitoredItemsPerCall`、`i=11714`）、1 つの購読に 1000 ノードまで。
 - サーバーが購読を捨てたとき（lifetime の時間切れ）は `StatusChangeNotification` が
@@ -114,6 +118,8 @@ async-opcua 0.19（fork `9ee772b`）のクライアントの購読について�
   2. NamespaceArray と OperationLimits を読み直す（ADR-0005 と同じ）、
   3. 登録した並びから購読を作り直し、表を「最初の通知待ち」に戻す、
   4. Publish を始めさせる（`trigger_publish_now`。async-opcua の再開の漏れへの対処）。
+     2026-11-05 追記: 部品からは呼んでいない。async-opcua の購読の作成
+     （`create_subscription`）が中で `trigger_publish_now` を呼ぶので、3 で足りている。
   作り直すまでの取り出しは `Error::Disconnected`。
 
 ### 要求の分け方

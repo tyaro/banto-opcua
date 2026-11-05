@@ -25,6 +25,7 @@
 
 - 既存の `OpcUaClient::connect` / `connect_with_session_timeout` も、async-opcua の自動再接続を止めるようになった（以前は 2 回まで張り直した）。
 - `ConnectedClient::read_server_state` / `read_u32` は、接続が切れている（張り直している）ときに `Error::Disconnected` を返すようになった（以前は `Error::Read`）。
+- async-opcua の固定を、fork の修正 3 件を上流の master（`f2265a91`）の上に載せ直した `8d347a4` へ移した。上流の再接続後の Publish の再開と、失われた通知の Republish が入る。依存の `serde_yaml` は `yaml_serde` に替わった（ADR-0001、ADR-0006、#17）。
 
 ## [0.1.0] - 2026-10-17
 
