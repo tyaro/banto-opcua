@@ -5,12 +5,16 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-05
+
+Hub のドライバ向けの OPC UA クライアントの部品（ADR-0005、#33）と、購読モード
+（ADR-0006）を含む。async-opcua の固定を上流の master の上へ移した（#50、#17）。
+
 ### 追加
 
 - クライアントの購読モード（ADR-0006）。`ConnectedClient::monitor` でノードの並びを登録し、`ConnectedClient::latest` で購読で受けた最新の値・StatusCode・SourceTimestamp を登録した順に取り出す。設定は `ClientConfig::with_subscription`（`SubscriptionSettings`）。MonitoredItem の作成は `MaxMonitoredItemsPerCall` で分け、購読に入れられる数を超えたノードは `BadTooManyMonitoredItems` にする。Publish の失敗では購読を作り直し、購読を失ったら（`BadNoSubscription` など）接続ごとの失敗にする。async-opcua の購読の作り直しは使わず、自動再接続の後は NamespaceArray を読み直して部品が作り直す。
 - core の StatusCode に `BAD_WAITING_FOR_INITIAL_DATA` / `BAD_TOO_MANY_MONITORED_ITEMS`。
 - opc-plc との相互接続テストを、クライアントの部品のまとめて Read（型ごと、`ns=` / `nsu=`、存在しないノード）、まとめて Write（書けるノード、`BadNotWritable`、`BadTypeMismatch`）と Write の後の Read、購読モードへ広げた（例 `interop_opc_plc`。`interop_read` を置き換え）。
-
 - core の `NodeAddress`。クライアントが読み書きするノードの文字列表現（`ns=` / `nsu=` と `i=` / `s=`、async-opcua の表示が付ける `svr=0;`）を解析し、接続先の NamespaceArray で `NodeId` へ解決する。GUID と ByteString の識別子は「未対応の識別子の型」として、ほかの解析エラーと区別する（ADR-0005、#33）。
 - core の `ScalarValue` / `ScalarType`。クライアントが読み書きする OPC UA のスカラーの組み込み型（ADR-0005、#33）。
 - クライアントの `ClientConfig` と `OpcUaClient::connect_with`。接続の待ち時間・要求の時間切れ・keep-alive の間隔と失敗回数を設定し、既定では async-opcua の自動再接続を止める。`ReconnectPolicy::Automatic` で部品の側の自動再接続も選べる（張り直した後に NamespaceArray と OperationLimits を読み直す）（ADR-0005、#33）。
@@ -24,6 +28,7 @@
 ### 変更
 
 - 既存の `OpcUaClient::connect` / `connect_with_session_timeout` も、async-opcua の自動再接続を止めるようになった（以前は 2 回まで張り直した）。
+- クライアントの `Error` を `#[non_exhaustive]` にし、`Disconnected` / `Subscribe` / `Write` を足した。網羅的に `match` していた利用者は、ワイルドカードの腕が要る。
 - `ConnectedClient::read_server_state` / `read_u32` は、接続が切れている（張り直している）ときに `Error::Disconnected` を返すようになった（以前は `Error::Read`）。
 - async-opcua の固定を、fork の修正 3 件を上流の master（`f2265a91`）の上に載せ直し、Republish の番号の控えが同じ ID の新しい購読に残る不具合の修正を重ねた `9daa957` へ移した。上流の再接続後の Publish の再開と、失われた通知の Republish が入る。依存の `serde_yaml` は `yaml_serde` に替わった（ADR-0001、ADR-0006、#17）。
 
@@ -77,5 +82,6 @@ ADR-0004 の書き込みハンドラーに通す Write を含む。
 - 自由関数 `endpoint_url` を公開 API から外した。`ServerConfig::endpoint_url` を使う。
 - `RunningServer::namespace_index()` を追加。`Error::TagUpdate` の表示文言をタグ操作全般に合わせた。
 
-[Unreleased]: https://github.com/tyaro/banto-opcua/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/tyaro/banto-opcua/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/tyaro/banto-opcua/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/tyaro/banto-opcua/releases/tag/v0.1.0
