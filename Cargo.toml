@@ -26,7 +26,7 @@ banto-opcua-core = { path = "crates/banto-opcua-core" }
 # 0.19.0 未収録の品質変更通知修正（upstream #274）、採取時刻保持修正（fork PR #1）、
 # 接続終了時のサービス中止（fork PR #2、ADR-0004）。
 # #17: これらを含む公開版が出たら crates.io に戻す。
-async-opcua = { git = "https://github.com/tyaro/async-opcua", rev = "9ee772bb994165520784528459b16c570c31990d", default-features = false }
+async-opcua = { git = "https://github.com/tyaro/async-opcua", rev = "9daa957a0ccf425bcb61bc488e828ccf2495c302", default-features = false }
 # クライアントのイベントループのストリームを回す。async-opcua が既に引いている。
 futures-util = { version = "0.3", default-features = false }
 thiserror = "2"
