@@ -302,6 +302,11 @@ fn poisoned<T>(_: std::sync::PoisonError<T>) -> Error {
     Error::Subscribe("購読の最新値の表を読めません".to_owned())
 }
 
+/// 張り直す前の購読を消せなかった（削除の要求が届かなかった）。次の呼び出しで消し直す。
+fn stale_subscription() -> Error {
+    Error::Subscribe("前の接続の購読を消せませんでした。もう一度呼んでください".to_owned())
+}
+
 /// サービス全体の拒否のうち、塊を小さくすれば通るもの。
 fn is_too_many_operations(error: &opcua::types::Error) -> bool {
     error.status() == UaStatusCode::BadTooManyOperations
@@ -677,7 +682,9 @@ impl ConnectedClient {
             && previous.generation != info.generation
         {
             // 張り直した後は、新しい購読が古い購読と同じ ID になりうる（latest と同じ）。
-            self.forget_subscription(previous).await;
+            if !self.forget_subscription(previous).await {
+                return Err(stale_subscription());
+            }
         }
         let (subscription_id, statuses) = match self.subscribe(&info, nodes, None).await {
             Ok(created) => created,
@@ -744,8 +751,11 @@ impl ConnectedClient {
             if reconnected {
                 // 張り直した先のサーバーは、購読の ID を 1 から振り直すことがある。新しい
                 // 購読が古い購読と同じ ID になりうるので、古い購読のクライアントの状態を
-                // 先に消す（サーバーには無いので Bad が返る）。
-                self.forget_subscription(current).await;
+                // 先に消す（サーバーには無いので Bad が返る）。消せなければ世代を合わないまま
+                // にして、次の呼び出しで消し直す。
+                if !self.forget_subscription(current).await {
+                    return Err(stale_subscription());
+                }
             }
             match self.subscribe(&info, &current.addresses, carried).await {
                 Ok((subscription_id, _)) => {
@@ -770,14 +780,25 @@ impl ConnectedClient {
     }
 
     /// 登録の購読を消し、ID を忘れる。もう消してあれば何もしない。
-    async fn forget_subscription(&self, monitored: &mut Monitored) {
-        if monitored.subscription_id != 0 {
-            let _ = self
-                .session
-                .delete_subscription(monitored.subscription_id)
-                .await;
-            monitored.subscription_id = 0;
+    ///
+    /// 削除の要求が届かなかったときは ID を残して `false` を返す。async-opcua のクライアントは、
+    /// 削除の応答を受けたときだけ購読の状態（配信済みの通知の番号）を消す。残したまま同じ ID の
+    /// 購読を作ると、新しい購読の通知を配信済みとして捨てるので、作り直す前に消し直す。
+    /// サーバーに購読が無い（応答の結果が Bad）ときは、状態は消えるので `true`。
+    async fn forget_subscription(&self, monitored: &mut Monitored) -> bool {
+        if monitored.subscription_id == 0 {
+            return true;
         }
+        if self
+            .session
+            .delete_subscriptions(&[monitored.subscription_id])
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        monitored.subscription_id = 0;
+        true
     }
 
     /// 新しい登録の番号で表を入れ替え、購読と MonitoredItem を作る。購読の ID と、
