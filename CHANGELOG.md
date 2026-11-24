@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-24
+
 数値と文字列のタグを元の型のまま公開する（ADR-0007、#56）。公開 API に互換でない変更がある。
 タグの説明・単位・レンジ・二値の文言を、変数ノードの Description と標準のプロパティで公開する（ADR-0008、#55）。
 Phase 3 のセキュリティ（署名・暗号化、UserName、証明書の信頼の一覧）をサーバーとクライアントに入れる（ADR-0009、#54）。サーバーの既定のエンドポイントから `None` が消えた。
@@ -127,6 +129,7 @@ ADR-0004 の書き込みハンドラーに通す Write を含む。
 - 自由関数 `endpoint_url` を公開 API から外した。`ServerConfig::endpoint_url` を使う。
 - `RunningServer::namespace_index()` を追加。`Error::TagUpdate` の表示文言をタグ操作全般に合わせた。
 
-[Unreleased]: https://github.com/tyaro/banto-opcua/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/tyaro/banto-opcua/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/tyaro/banto-opcua/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/tyaro/banto-opcua/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/tyaro/banto-opcua/releases/tag/v0.1.0
