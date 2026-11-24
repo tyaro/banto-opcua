@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 数値と文字列のタグを元の型のまま公開する（ADR-0007、#56）。公開 API に互換でない変更がある。
+タグの説明・単位・レンジ・二値の文言を、変数ノードの Description と標準のプロパティで公開する（ADR-0008、#55）。
 
 ### 追加
 
@@ -14,6 +15,10 @@
 - core の `MappedValue::from_number`（f64 から丸めずに変える）、`MappedValue::data_type`、`MappedValue::is_publishable_as`、`map_typed_value`、`MAX_STRING_BYTES`（4096）、`MappedValue` の `Display`。
 - core の `From<MappedValue> for ScalarValue` と `TryFrom<ScalarValue> for MappedValue`（SByte と Byte は `NotPublishable`）。
 - サーバーの `TagReading::typed`。64 ビットの整数や String を f64 を経由せずに渡す。
+- core の `TagMetadata`（`EngineeringUnits`・`EuRange`・`TwoStateLabels`）、`MetadataShape`・`VariableType`・`MetadataError`、`UNECE_UNITS_NAMESPACE_URI`。`EngineeringUnits::unit_id` は UNECE の Common Code から OPC 10000-8 の UnitId を作る。
+- サーバーの `RunningServer::add_tag_reading_with_metadata` と `update_tag_metadata`。説明は Description 属性に、単位・レンジ・文言は EngineeringUnits・EURange・TrueState・FalseState のプロパティにする。型定義は、EURange があれば AnalogItemType、単位だけなら BaseAnalogType、文言のある Boolean は TwoStateDiscreteType、ほかは BaseDataVariableType。
+- `update_tag_metadata` は、ノードの形（型定義と持つプロパティ）が同じなら同じ NodeId のまま書き換えて購読者へ通知する。形が変わるならエラーにし、何も変えない。
+- `remove_tag` はプロパティも消し、プロパティの購読者へも `BadNodeIdUnknown` を通知する。
 
 ### 変更
 

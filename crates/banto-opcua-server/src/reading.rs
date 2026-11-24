@@ -99,6 +99,24 @@ pub(crate) fn data_type_id(data_type: DataType) -> DataTypeId {
     }
 }
 
+/// ノードの DataType 属性から core の型を引く。公開する型でなければ `None`。
+pub(crate) fn data_type_from_id(id: &opcua::types::NodeId) -> Option<DataType> {
+    [
+        DataType::Boolean,
+        DataType::Int16,
+        DataType::UInt16,
+        DataType::Int32,
+        DataType::UInt32,
+        DataType::Int64,
+        DataType::UInt64,
+        DataType::Float,
+        DataType::Double,
+        DataType::String,
+    ]
+    .into_iter()
+    .find(|data_type| *id == data_type_id(*data_type))
+}
+
 /// ノードを作るときの仮の値。Variable はこの値の型から DataType 属性を決める。
 pub(crate) fn placeholder(data_type: DataType) -> Variant {
     match data_type {

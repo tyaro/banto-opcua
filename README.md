@@ -42,6 +42,10 @@ Read と 0 ms / 非ゼロの sampling interval の購読で、入力した Sourc
 遅延したサンプルの時刻を保持する async-opcua の修正は、MPL-2.0 の
 [別リポジトリ](https://github.com/tyaro/async-opcua/pull/1)で公開している。
 この境界の理由は [ADR-0002](docs/adr/0002-dynamic-reading-boundary.md) に記す。
+`add_tag_reading_with_metadata` / `update_tag_metadata` は、タグの説明・単位・レンジ・
+二値の文言（`TagMetadata`）を、Description 属性と標準のプロパティ（EngineeringUnits・
+EURange・TrueState・FalseState）で公開する。型定義は AnalogItemType などから属性に応じて選ぶ
+（[ADR-0008](docs/adr/0008-tag-metadata-properties.md)）。
 `ServerConfig::with_pki_dir` を指定すると、自己署名の鍵と証明書を初回だけ作り、
 以降の起動で再利用する。未指定なら起動ごとに一時ディレクトリへ作る
 （[ADR-0003](docs/adr/0003-persistent-pki-dir.md)）。

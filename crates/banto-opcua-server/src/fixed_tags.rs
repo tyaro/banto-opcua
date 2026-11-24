@@ -15,12 +15,14 @@ use opcua::{
     },
 };
 
-use banto_opcua_core::DataType;
+use banto_opcua_core::{DataType, TagMetadata};
 
-use opcua::server::address_space::NodeType;
+use opcua::server::address_space::{NodeBase, NodeType};
 
 use crate::{
-    Error, reading,
+    Error, TagReading,
+    metadata::{self, Property},
+    reading,
     tag_manager::{self, TagName, TagNodeManager, WritePath},
 };
 
@@ -41,9 +43,11 @@ pub(crate) struct FixedTags {
     pub(crate) manager: Arc<TagNodeManager>,
 }
 
-struct InitialTagValue {
+struct InitialTagValue<'a> {
     placeholder: Variant,
     data_value: DataValue,
+    metadata: &'a TagMetadata,
+    data_type: Option<DataType>,
 }
 
 impl FixedTags {
@@ -150,6 +154,8 @@ impl FixedTags {
             InitialTagValue {
                 placeholder: value.clone(),
                 data_value: DataValue::new_now(value),
+                metadata: &TagMetadata::default(),
+                data_type: None,
             },
             after_insert,
         )
@@ -161,9 +167,14 @@ impl FixedTags {
         connection: &str,
         group: &str,
         tag: &str,
-        data_type: DataType,
-        value: DataValue,
+        reading: TagReading,
+        metadata: &TagMetadata,
     ) -> Result<(), Error> {
+        let data_type = reading.data_type;
+        let value = reading.data_value();
+        metadata
+            .validate(data_type)
+            .map_err(|error| Error::TagUpdate(error.to_string()))?;
         let placeholder = reading::placeholder(data_type);
         self.add_tag_data_value_with(
             handle,
@@ -173,6 +184,8 @@ impl FixedTags {
             InitialTagValue {
                 placeholder,
                 data_value: value,
+                metadata,
+                data_type: Some(data_type),
             },
             || {},
         )
@@ -221,15 +234,54 @@ impl FixedTags {
             initial.placeholder,
         );
         variable.set_data_value(initial.data_value);
+        variable.set_description(metadata::description(initial.metadata));
+        let variable_type = initial
+            .data_type
+            .map_or(VariableTypeId::BaseDataVariableType, |data_type| {
+                metadata::variable_type_id(initial.metadata.shape(data_type).variable_type)
+            });
+        let properties: Vec<_> = Property::ALL
+            .into_iter()
+            .filter_map(|property| Some((property, property.value(initial.metadata)?)))
+            .map(|(property, value)| {
+                let id =
+                    metadata::property_id(self.namespace_index, connection, group, tag, property);
+                (id, property, value)
+            })
+            .collect();
+        if properties.iter().any(|(id, _, _)| space.node_exists(id)) {
+            return Err(Error::TagUpdate(format!(
+                "タグ {tag_id} のプロパティが残っています"
+            )));
+        }
         if !space.insert::<_, NodeId>(variable, None) {
             return Err(Error::TagUpdate(format!("タグ {tag_id} を登録できません")));
         }
         space.insert_reference(&group_id, &tag_id, ReferenceTypeId::HasComponent);
         space.insert_reference(
             &tag_id,
-            &VariableTypeId::BaseDataVariableType.into(),
+            &variable_type.into(),
             ReferenceTypeId::HasTypeDefinition,
         );
+        for (id, property, value) in properties {
+            let node = Variable::new_data_value(
+                &id,
+                QualifiedName::new(0, property.browse_name()),
+                property.browse_name(),
+                property.data_type(),
+                None,
+                None,
+                value,
+            );
+            // 直前に存在しないことを確かめたので失敗しない。
+            space.insert::<_, NodeId>(node, None);
+            space.insert_reference(&tag_id, &id, ReferenceTypeId::HasProperty);
+            space.insert_reference(
+                &id,
+                &VariableTypeId::PropertyType.into(),
+                ReferenceTypeId::HasTypeDefinition,
+            );
+        }
         self.manager.inner().tags().write().insert(
             tag_id.clone(),
             TagName {
@@ -297,6 +349,83 @@ impl FixedTags {
         Ok(())
     }
 
+    /// 登録済みタグの Description とプロパティの値を書き換え、購読者へ通知する。
+    /// ノードの形（型定義と持つプロパティ）が変わるなら書き換えずにエラーにする。
+    pub fn update_tag_metadata(
+        &self,
+        handle: &ServerHandle,
+        connection: &str,
+        group: &str,
+        tag: &str,
+        metadata: &TagMetadata,
+    ) -> Result<(), Error> {
+        validate_path(connection, group, tag)?;
+        let id = NodeId::new(self.namespace_index, format!("{connection}.{group}.{tag}"));
+        let group_id = folder_id(self.namespace_index, &[connection, group]);
+        let mut space = self.manager.address_space().write();
+        // サンプルタグは外部名を持たないので、属性を付けられない。
+        if !space.has_reference(&group_id, &id, ReferenceTypeId::HasComponent)
+            || !self.manager.inner().tags().read().contains_key(&id)
+        {
+            return Err(Error::TagUpdate(format!(
+                "タグ {id} は指定されたグループにありません"
+            )));
+        }
+        let Some(NodeType::Variable(variable)) = space.find(&id) else {
+            return Err(Error::TagUpdate(format!("タグ {id} が見つかりません")));
+        };
+        let data_type = reading::data_type_from_id(&variable.data_type()).ok_or_else(|| {
+            Error::TagUpdate(format!("タグ {id} の DataType は属性を付けられません"))
+        })?;
+        metadata
+            .validate(data_type)
+            .map_err(|error| Error::TagUpdate(error.to_string()))?;
+        let shape = metadata.shape(data_type);
+        let property_ids = Property::ALL.map(|property| {
+            (
+                property,
+                metadata::property_id(self.namespace_index, connection, group, tag, property),
+            )
+        });
+        let same_shape = space.has_reference(
+            &id,
+            &metadata::variable_type_id(shape.variable_type).into(),
+            ReferenceTypeId::HasTypeDefinition,
+        ) && property_ids
+            .iter()
+            .all(|(property, node)| space.node_exists(node) == property.in_shape(shape));
+        if !same_shape {
+            return Err(Error::TagUpdate(format!(
+                "タグ {id} のノードの形（型定義かプロパティの有無）が変わります。削除して登録し直してください"
+            )));
+        }
+        if let Some(NodeType::Variable(variable)) = space.find_mut(&id) {
+            variable.set_description(metadata::description(metadata));
+        }
+        let mut changed = vec![(id.clone(), AttributeId::Description)];
+        for (property, node) in &property_ids {
+            let (Some(value), Some(NodeType::Variable(variable))) =
+                (property.value(metadata), space.find_mut(node))
+            else {
+                continue;
+            };
+            variable.set_data_value(DataValue::new_now(value));
+            changed.push((node.clone(), AttributeId::Value));
+        }
+        handle.subscriptions().maybe_notify(
+            changed.iter().map(|(node, attribute)| (node, *attribute)),
+            |id, attribute, range, encoding| {
+                space.find(id)?.as_node().get_attribute(
+                    TimestampsToReturn::Both,
+                    attribute,
+                    range,
+                    encoding,
+                )
+            },
+        );
+        Ok(())
+    }
+
     /// 削除通知を流してからアドレス空間から外す。MonitoredItem は保持する。
     pub fn remove_tag(
         &self,
@@ -317,20 +446,28 @@ impl FixedTags {
             )));
         }
         let now = DateTime::now();
+        let properties: Vec<_> = Property::ALL
+            .into_iter()
+            .map(|property| {
+                metadata::property_id(self.namespace_index, connection, group, tag, property)
+            })
+            .filter(|property| space.node_exists(property))
+            .collect();
+        let removed = DataValue {
+            value: None,
+            status: Some(StatusCode::BadNodeIdUnknown),
+            source_timestamp: Some(now),
+            server_timestamp: Some(now),
+            ..Default::default()
+        };
         handle.subscriptions().notify_data_change(
-            [(
-                DataValue {
-                    value: None,
-                    status: Some(StatusCode::BadNodeIdUnknown),
-                    source_timestamp: Some(now),
-                    server_timestamp: Some(now),
-                    ..Default::default()
-                },
-                &id,
-                AttributeId::Value,
-            )]
-            .into_iter(),
+            std::iter::once(&id)
+                .chain(&properties)
+                .map(|node| (removed.clone(), node, AttributeId::Value)),
         );
+        for property in &properties {
+            space.delete(property, true);
+        }
         space.delete(&id, true);
         self.manager.inner().tags().write().remove(&id);
         Ok(())

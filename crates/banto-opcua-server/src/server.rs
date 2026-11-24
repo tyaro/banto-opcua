@@ -15,7 +15,9 @@ use opcua::{
 };
 use tokio::{net::TcpListener, task::JoinHandle};
 
-use banto_opcua_core::{DataType, MAX_STRING_BYTES, MappedValue, Quality, SampleTimestamps};
+use banto_opcua_core::{
+    DataType, MAX_STRING_BYTES, MappedValue, Quality, SampleTimestamps, TagMetadata,
+};
 
 use crate::{
     Error, ServerConfig, TagReading, WriteHandler,
@@ -336,14 +338,46 @@ impl RunningServer {
         tag: &str,
         reading: TagReading,
     ) -> Result<(), Error> {
-        self.fixed_tags.add_tag_reading(
-            &self.handle,
-            connection,
-            group,
-            tag,
-            reading.data_type,
-            reading.data_value(),
-        )
+        self.add_tag_reading_with_metadata(connection, group, tag, reading, &TagMetadata::default())
+    }
+
+    /// [`Self::add_tag_reading`] に、説明・単位・レンジ・二値の文言を付けて登録する
+    /// （ADR-0008）。属性がタグの型に合わなければエラー。
+    ///
+    /// 属性に応じて型定義を選ぶ。EURange があれば AnalogItemType、単位だけなら
+    /// BaseAnalogType、二値の文言があれば TwoStateDiscreteType、ほかは
+    /// BaseDataVariableType。プロパティは名前空間 0 の標準の BrowseName で、
+    /// HasProperty で辿れる。
+    pub fn add_tag_reading_with_metadata(
+        &self,
+        connection: &str,
+        group: &str,
+        tag: &str,
+        reading: TagReading,
+        metadata: &TagMetadata,
+    ) -> Result<(), Error> {
+        self.fixed_tags
+            .add_tag_reading(&self.handle, connection, group, tag, reading, metadata)
+    }
+
+    /// 登録済みタグの説明・単位・レンジ・二値の文言を書き換え、購読者へ通知する
+    /// （ADR-0008）。
+    ///
+    /// 同じ NodeId のまま書き換えられるのは、ノードの形（[`TagMetadata::shape`]。
+    /// 型定義と持つプロパティ）が同じときだけ。形が変わるならエラーを返し、何も
+    /// 変えない。そのときは [`Self::remove_tag`] と
+    /// [`Self::add_tag_reading_with_metadata`] で登録し直す。Description 属性と
+    /// プロパティの Value を購読しているクライアントへは、変更を通知する。
+    /// サンプルタグには付けられない。
+    pub fn update_tag_metadata(
+        &self,
+        connection: &str,
+        group: &str,
+        tag: &str,
+        metadata: &TagMetadata,
+    ) -> Result<(), Error> {
+        self.fixed_tags
+            .update_tag_metadata(&self.handle, connection, group, tag, metadata)
     }
 
     /// 登録済みタグの値・品質・時刻を更新し、購読者へ変更を通知する。

@@ -34,3 +34,4 @@
 | [0005](0005-client-as-hub-driver.md) | OPC UA クライアントを Hub のドライバ向けの部品として作る | Accepted |
 | [0006](0006-client-subscription-latest-values.md) | クライアントの購読モードでは、購読で受けた最新値を部品が持つ | Proposed |
 | [0007](0007-publish-native-data-types.md) | 数値と文字列のタグを元の型のまま公開する | Accepted |
+| [0008](0008-tag-metadata-properties.md) | タグの説明・単位・レンジを、変数ノードの Description と標準のプロパティで公開する | Accepted |
