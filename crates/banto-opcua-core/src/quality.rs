@@ -59,6 +59,10 @@ impl StatusCode {
     pub const BAD_NOT_SUPPORTED: Self = Self(0x803D_0000);
     /// `BadTooManyOperations`（0x80100000）。要求のノード数がサーバーの上限を超えた。
     pub const BAD_TOO_MANY_OPERATIONS: Self = Self(0x8010_0000);
+    /// `BadNodeIdInvalid`（0x80330000）。NodeId の形がそのサーバーで正しくない。
+    pub const BAD_NODE_ID_INVALID: Self = Self(0x8033_0000);
+    /// `BadAttributeIdInvalid`（0x80350000）。ノードがその属性を持たない（Description など任意の属性）。
+    pub const BAD_ATTRIBUTE_ID_INVALID: Self = Self(0x8035_0000);
 
     /// 32 ビットの生値を返す。
     pub const fn code(self) -> u32 {

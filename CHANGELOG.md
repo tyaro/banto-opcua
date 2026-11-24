@@ -20,7 +20,8 @@
 - `update_tag_metadata` は、ノードの形（型定義と持つプロパティ）が同じなら同じ NodeId のまま書き換えて購読者へ通知する。単位・レンジ・文言の値が変わったら、タグ本体の Value の購読者にも SemanticsChanged を立てて通知する。形が変わるなら `Error::MetadataShapeChanged`（新しい変種）にし、何も変えない。意味を決めるプロパティの AccessLevel には SemanticChange を付ける。
 - タグを登録し直したとき、作り直したプロパティの購読者へも通知し、同じ監視項目のまま Good に戻す。
 - `remove_tag` はプロパティも消し、プロパティの購読者へも `BadNodeIdUnknown` を通知する。
-- クライアントの `ConnectedClient::read_metadata` と `NodeMetadata`。ノードの並びの Description と EngineeringUnits・EURange・TrueState・FalseState のプロパティを読み、`TagMetadata` で返す（型定義は問わない）。Read と TranslateBrowsePathsToNodeIds は `read_batch` と同じ規則で分けて送る。
+- クライアントの `ConnectedClient::read_metadata` と `NodeMetadata`。ノードの並びの Description と EngineeringUnits・EURange・TrueState・FalseState のプロパティを読み、`TagMetadata` で返す（型定義は問わない）。Description を持たないノード（`BadAttributeIdInvalid`）からも単位・レンジを読む。Read と TranslateBrowsePathsToNodeIds は `read_batch` と同じ規則で分けて送る。
+- core の StatusCode に `BAD_NODE_ID_INVALID` / `BAD_ATTRIBUTE_ID_INVALID`。
 
 ### 変更
 

@@ -98,5 +98,13 @@ mod tests {
             Core::BAD_TOO_MANY_OPERATIONS.code(),
             Ua::BadTooManyOperations.bits()
         );
+        assert_eq!(
+            Core::BAD_NODE_ID_INVALID.code(),
+            Ua::BadNodeIdInvalid.bits()
+        );
+        assert_eq!(
+            Core::BAD_ATTRIBUTE_ID_INVALID.code(),
+            Ua::BadAttributeIdInvalid.bits()
+        );
     }
 }

@@ -10,8 +10,12 @@ use opcua::types::{DataValue, EUInformation, LocalizedText, Range, Variant};
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct NodeMetadata {
-    /// ノードの Description 属性を読んだ StatusCode。Bad ならノードが無いなどで、
-    /// `metadata` は空。名前空間 URI を解決できなかったノードは、送らずに `BadNodeIdUnknown`。
+    /// ノードの結果。Good、またはノードの Description 属性を読めなかった理由。
+    ///
+    /// Description は任意の属性なので、`BadAttributeIdInvalid`（持たない）は Good にする。
+    /// `BadNodeIdUnknown`・`BadNodeIdInvalid`（ノードが無い）なら `metadata` は空。
+    /// それ以外の Bad（アクセス拒否など）では説明は `None` だが、プロパティは読んである。
+    /// 名前空間 URI を解決できなかったノードは、送らずに `BadNodeIdUnknown`。
     pub status: StatusCode,
     /// 読めた属性。無いプロパティ、読めなかったプロパティ、型の違う値は `None`。
     pub metadata: TagMetadata,
@@ -50,6 +54,18 @@ impl Property {
             Self::TrueState => "TrueState",
             Self::FalseState => "FalseState",
         }
+    }
+}
+
+/// Description を読んだ StatusCode から、ノードの結果と、プロパティを辿るかを決める。
+pub(crate) fn description_outcome(status: StatusCode) -> (StatusCode, bool) {
+    if status == StatusCode::BAD_ATTRIBUTE_ID_INVALID {
+        (StatusCode::GOOD, true)
+    } else if status == StatusCode::BAD_NODE_ID_UNKNOWN || status == StatusCode::BAD_NODE_ID_INVALID
+    {
+        (status, false)
+    } else {
+        (status, true)
     }
 }
 
@@ -217,6 +233,28 @@ mod tests {
         );
         assert_eq!(metadata.eu_range, None, "Range でない値は足さない");
         assert_eq!(metadata.engineering_units, None);
+    }
+
+    #[test]
+    fn missing_description_is_not_a_node_failure() {
+        assert_eq!(
+            description_outcome(StatusCode::BAD_ATTRIBUTE_ID_INVALID),
+            (StatusCode::GOOD, true)
+        );
+        assert_eq!(
+            description_outcome(StatusCode::GOOD),
+            (StatusCode::GOOD, true)
+        );
+        for missing in [
+            StatusCode::BAD_NODE_ID_UNKNOWN,
+            StatusCode::BAD_NODE_ID_INVALID,
+        ] {
+            assert_eq!(description_outcome(missing), (missing, false));
+        }
+        assert_eq!(
+            description_outcome(StatusCode::BAD_USER_ACCESS_DENIED),
+            (StatusCode::BAD_USER_ACCESS_DENIED, true)
+        );
     }
 
     #[test]

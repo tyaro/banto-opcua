@@ -41,6 +41,10 @@ fn temperature_metadata() -> TagMetadata {
 }
 
 async fn connect(server: &RunningServer) -> (std::sync::Arc<Session>, tempfile::TempDir) {
+    connect_to(server.endpoint()).await
+}
+
+async fn connect_to(endpoint: &str) -> (std::sync::Arc<Session>, tempfile::TempDir) {
     let pki = tempfile::tempdir().expect("一時 PKI を作る");
     let mut client = ClientBuilder::new()
         .application_name("banto-opcua-metadata-test")
@@ -54,7 +58,7 @@ async fn connect(server: &RunningServer) -> (std::sync::Arc<Session>, tempfile::
     let (session, event_loop) = client
         .connect_to_matching_endpoint(
             (
-                server.endpoint(),
+                endpoint,
                 SecurityPolicy::None.to_str(),
                 MessageSecurityMode::None,
                 UserTokenPolicy::anonymous(),
@@ -761,4 +765,135 @@ async fn property_subscriptions_resume_when_the_tag_is_registered_again() {
     );
 
     server.shutdown().await.expect("止める");
+}
+
+/// async-opcua だけで作る「他社のサーバー」。Description を持たない変数 `Level` に、
+/// EngineeringUnits と EURange のプロパティを付ける。
+async fn foreign_server() -> (String, u16, tokio::task::JoinHandle<()>, tempfile::TempDir) {
+    use opcua::server::{
+        ANONYMOUS_USER_TOKEN_ID, ServerBuilder, ServerEndpoint,
+        address_space::Variable,
+        diagnostics::NamespaceMetadata,
+        node_manager::memory::{SimpleNodeManager, simple_node_manager},
+    };
+    use opcua::types::{DataTypeId, ExtensionObject, ObjectId, QualifiedName};
+
+    let pki = tempfile::tempdir().expect("一時 PKI を作る");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("待受を作る");
+    let port = listener.local_addr().expect("ポート").port();
+    let endpoint = format!("opc.tcp://127.0.0.1:{port}/");
+    let (server, handle) = ServerBuilder::new()
+        .application_name("foreign")
+        .application_uri("urn:banto:opcua:foreign-test")
+        .create_sample_keypair(true)
+        .pki_dir(pki.path())
+        .host("127.0.0.1")
+        .port(port)
+        .trust_client_certs(true)
+        .add_endpoint(
+            "none",
+            ServerEndpoint::new_none("/", &[ANONYMOUS_USER_TOKEN_ID.to_owned()]),
+        )
+        .discovery_urls(vec![endpoint.clone()])
+        .with_node_manager(simple_node_manager(
+            NamespaceMetadata {
+                namespace_uri: "urn:foreign".to_owned(),
+                ..Default::default()
+            },
+            "foreign",
+        ))
+        .build()
+        .expect("他社のサーバーを作る");
+    let ns = handle
+        .get_namespace_index("urn:foreign")
+        .expect("名前空間がある");
+    let manager = handle
+        .node_managers()
+        .get_of_type::<SimpleNodeManager>()
+        .expect("node manager がある");
+    {
+        let mut space = manager.address_space().write();
+        let level = NodeId::new(ns, "Level");
+        assert!(space.insert::<_, NodeId>(Variable::new(&level, "Level", "Level", 3.5_f64), None));
+        space.insert_reference(
+            &ObjectId::ObjectsFolder.into(),
+            &level,
+            ReferenceTypeId::Organizes,
+        );
+        for (name, data_type, value) in [
+            (
+                "EngineeringUnits",
+                DataTypeId::EUInformation,
+                Variant::from(ExtensionObject::from_message(EUInformation {
+                    namespace_uri: UNECE_UNITS_NAMESPACE_URI.into(),
+                    unit_id: 5_067_858, // MTR
+                    display_name: "m".into(),
+                    description: LocalizedText::null(),
+                })),
+            ),
+            (
+                "EURange",
+                DataTypeId::Range,
+                Variant::from(ExtensionObject::from_message(Range {
+                    low: 0.0,
+                    high: 10.0,
+                })),
+            ),
+        ] {
+            let id = NodeId::new(ns, format!("Level.{name}"));
+            assert!(space.insert::<_, NodeId>(
+                Variable::new_data_value(
+                    &id,
+                    QualifiedName::new(0, name),
+                    name,
+                    data_type,
+                    None,
+                    None,
+                    value,
+                ),
+                None,
+            ));
+            space.insert_reference(&level, &id, ReferenceTypeId::HasProperty);
+        }
+    }
+    let task = tokio::spawn(async move {
+        let _ = server.run_with(listener).await;
+    });
+    (endpoint, ns, task, pki)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn units_are_read_from_nodes_without_a_description_attribute() {
+    use banto_opcua_client::{ClientConfig, OpcUaClient, model::StatusCode as ClientStatus};
+
+    let (endpoint, ns, task, _pki) = foreign_server().await;
+    let (session, _client_pki) = connect_to(&endpoint).await;
+    let level = NodeId::new(ns, "Level");
+    assert_eq!(
+        read(&session, &level, AttributeId::Description)
+            .await
+            .status(),
+        StatusCode::BadAttributeIdInvalid,
+        "相手は Description を持たない"
+    );
+
+    let client = OpcUaClient::connect_with(ClientConfig::new(&endpoint))
+        .await
+        .expect("クライアントが接続する");
+    let results = client
+        .read_metadata(&["nsu=urn:foreign;s=Level".parse().expect("解析できる")])
+        .await
+        .expect("読む");
+    assert_eq!(results[0].status, ClientStatus::GOOD);
+    assert_eq!(
+        results[0].metadata,
+        TagMetadata::new()
+            .with_engineering_units(EngineeringUnits::display("m").with_unece_code("MTR"))
+            .with_eu_range(EuRange::new(0.0, 10.0)),
+        "説明は無くても、単位とレンジは読む"
+    );
+    client.disconnect().await.expect("切断する");
+    task.abort();
 }

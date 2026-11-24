@@ -58,7 +58,9 @@ Description・EngineeringUnits・EURange が無く、渡す口も無かった。
   同じ BrowseName のプロパティ（HasProperty とその下位の参照を TranslateBrowsePathsToNodeIds で
   辿る）を読み、`TagMetadata` で返す。型定義は問わないので、他社のサーバーの単位も取り込める
   （banto-industrial #678）。UNECE の名前空間の UnitId はコードに戻す。無い・読めない・型の違う
-  プロパティは `None` にし、ノード全体を失敗にはしない。
+  プロパティは `None` にし、ノード全体を失敗にはしない。Description は任意の属性（OPC 10000-3 5.2）
+  なので、`BadAttributeIdInvalid` は説明が無いだけとしてプロパティを読む。プロパティを辿らないのは
+  ノードが無いとき（`BadNodeIdUnknown`・`BadNodeIdInvalid`）だけ。
 
 ## 検討した代替案
 

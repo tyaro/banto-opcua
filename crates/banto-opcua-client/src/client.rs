@@ -565,8 +565,12 @@ impl ConnectedClient {
     /// - 説明は Description 属性、単位・レンジ・文言は名前空間 0 の BrowseName
     ///   （`EngineeringUnits`・`EURange`・`TrueState`・`FalseState`）のプロパティ
     ///   （HasProperty とその下位の参照）から読む。型定義は問わない。
-    /// - Description を読めなかったノード（無いノードなど）は、その StatusCode と空の属性。
-    ///   無いプロパティ、読めなかったプロパティ、型の違う値は、その属性を `None` にする。
+    /// - Description は任意の属性なので、`BadAttributeIdInvalid` は説明が無いだけとして
+    ///   Good にし、プロパティは読む。ノードが無い（`BadNodeIdUnknown`・
+    ///   `BadNodeIdInvalid`）ときだけ、その StatusCode と空の属性にしてプロパティを辿らない。
+    ///   ほかの理由で Description を読めなかったとき（アクセス拒否など）は、その
+    ///   StatusCode を返しつつプロパティは読む。
+    /// - 無いプロパティ、読めなかったプロパティ、型の違う値は、その属性を `None` にする。
     /// - Read と TranslateBrowsePathsToNodeIds を、[`Self::read_batch`] と同じ規則で
     ///   分けて送る。切断・時間切れ・サービス全体のエラーは `Err`。
     pub async fn read_metadata(&self, nodes: &[NodeAddress]) -> Result<Vec<NodeMetadata>, Error> {
@@ -611,11 +615,14 @@ impl ConnectedClient {
         let mut owners = Vec::new();
         for ((position, node_id), value) in resolved.iter().zip(descriptions) {
             let status = value.status.map_or(StatusCode::GOOD, core_status_code);
+            let (status, read_properties) = metadata::description_outcome(status);
             results[*position].status = status;
-            if status.is_bad() {
+            if !read_properties {
                 continue;
             }
-            results[*position].metadata.description = metadata::description(&value);
+            if status.is_good() {
+                results[*position].metadata.description = metadata::description(&value);
+            }
             for property in Property::ALL {
                 owners.push((*position, property));
                 paths.push(BrowsePath {
