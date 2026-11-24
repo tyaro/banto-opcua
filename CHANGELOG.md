@@ -17,7 +17,8 @@
 - サーバーの `TagReading::typed`。64 ビットの整数や String を f64 を経由せずに渡す。
 - core の `TagMetadata`（`EngineeringUnits`・`EuRange`・`TwoStateLabels`）、`MetadataShape`・`VariableType`・`MetadataError`、`UNECE_UNITS_NAMESPACE_URI`。`EngineeringUnits::unit_id` は UNECE の Common Code から OPC 10000-8 の UnitId を作る。
 - サーバーの `RunningServer::add_tag_reading_with_metadata` と `update_tag_metadata`。説明は Description 属性に、単位・レンジ・文言は EngineeringUnits・EURange・TrueState・FalseState のプロパティにする。型定義は、EURange があれば AnalogItemType、単位だけなら BaseAnalogType、文言のある Boolean は TwoStateDiscreteType、ほかは BaseDataVariableType。
-- `update_tag_metadata` は、ノードの形（型定義と持つプロパティ）が同じなら同じ NodeId のまま書き換えて購読者へ通知する。形が変わるならエラーにし、何も変えない。
+- `update_tag_metadata` は、ノードの形（型定義と持つプロパティ）が同じなら同じ NodeId のまま書き換えて購読者へ通知する。単位・レンジ・文言の値が変わったら、タグ本体の Value の購読者にも SemanticsChanged を立てて通知する。形が変わるなら `Error::MetadataShapeChanged`（新しい変種）にし、何も変えない。意味を決めるプロパティの AccessLevel には SemanticChange を付ける。
+- タグを登録し直したとき、作り直したプロパティの購読者へも通知し、同じ監視項目のまま Good に戻す。
 - `remove_tag` はプロパティも消し、プロパティの購読者へも `BadNodeIdUnknown` を通知する。
 - クライアントの `ConnectedClient::read_metadata` と `NodeMetadata`。ノードの並びの Description と EngineeringUnits・EURange・TrueState・FalseState のプロパティを読み、`TagMetadata` で返す（型定義は問わない）。Read と TranslateBrowsePathsToNodeIds は `read_batch` と同じ規則で分けて送る。
 

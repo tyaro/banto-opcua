@@ -10,8 +10,9 @@ use opcua::{
         address_space::{AccessLevel, ObjectBuilder, Variable},
     },
     types::{
-        AttributeId, ByteString, DataValue, DateTime, Identifier, NodeId, ObjectId, QualifiedName,
-        ReferenceTypeId, StatusCode, TimestampsToReturn, VariableTypeId, Variant,
+        AttributeId, ByteString, DataEncoding, DataValue, DateTime, Identifier, NodeId,
+        NumericRange, ObjectId, QualifiedName, ReferenceTypeId, StatusCode, TimestampsToReturn,
+        VariableTypeId, Variant,
     },
 };
 
@@ -263,8 +264,11 @@ impl FixedTags {
             &variable_type.into(),
             ReferenceTypeId::HasTypeDefinition,
         );
+        let added: Vec<_> = std::iter::once(tag_id.clone())
+            .chain(properties.iter().map(|(id, _, _)| id.clone()))
+            .collect();
         for (id, property, value) in properties {
-            let node = Variable::new_data_value(
+            let mut node = Variable::new_data_value(
                 &id,
                 QualifiedName::new(0, property.browse_name()),
                 property.browse_name(),
@@ -273,6 +277,10 @@ impl FixedTags {
                 None,
                 value,
             );
+            // 値は親の意味を決め、書き換わりうる（OPC 10000-3 5.6.2）。
+            let level = AccessLevel::CURRENT_READ | AccessLevel::SEMANTIC_CHANGE;
+            node.set_access_level(level);
+            node.set_user_access_level(level);
             // 直前に存在しないことを確かめたので失敗しない。
             space.insert::<_, NodeId>(node, None);
             space.insert_reference(&tag_id, &id, ReferenceTypeId::HasProperty);
@@ -292,9 +300,10 @@ impl FixedTags {
         );
         after_insert();
         // 初期値の保存と通知まで write ロックで排他し、削除・再登録との逆転を防ぐ。
-        // 通常の値更新と同じ sampler で監視項目ごとにノードを読み直す。
+        // 通常の値更新と同じ sampler で監視項目ごとにノードを読み直す。プロパティも
+        // 通知し、削除で Bad になった購読を同じ監視項目のまま戻す。
         handle.subscriptions().maybe_notify(
-            [(&tag_id, AttributeId::Value)].into_iter(),
+            added.iter().map(|node| (node, AttributeId::Value)),
             |id, attribute, range, encoding| {
                 space.find(id)?.as_node().get_attribute(
                     TimestampsToReturn::Both,
@@ -395,22 +404,38 @@ impl FixedTags {
             .iter()
             .all(|(property, node)| space.node_exists(node) == property.in_shape(shape));
         if !same_shape {
-            return Err(Error::TagUpdate(format!(
-                "タグ {id} のノードの形（型定義かプロパティの有無）が変わります。削除して登録し直してください"
-            )));
+            return Err(Error::MetadataShapeChanged(id.to_string()));
         }
         if let Some(NodeType::Variable(variable)) = space.find_mut(&id) {
             variable.set_description(metadata::description(metadata));
         }
         let mut changed = vec![(id.clone(), AttributeId::Description)];
+        let mut semantics_changed = false;
         for (property, node) in &property_ids {
             let (Some(value), Some(NodeType::Variable(variable))) =
                 (property.value(metadata), space.find_mut(node))
             else {
                 continue;
             };
+            if current_value(variable).value.as_ref() == Some(&value) {
+                continue;
+            }
+            semantics_changed = true;
             variable.set_data_value(DataValue::new_now(value));
             changed.push((node.clone(), AttributeId::Value));
+        }
+        // 単位・レンジ・文言が変わったら、値の購読者にも SemanticsChanged で知らせる
+        // （OPC 10000-8 5.2）。値・品質・時刻はそのまま。次の値の更新でビットは消える。
+        if semantics_changed && let Some(NodeType::Variable(variable)) = space.find_mut(&id) {
+            let mut value = current_value(variable);
+            value.status = Some(
+                value
+                    .status
+                    .unwrap_or(StatusCode::Good)
+                    .set_semantics_changed(true),
+            );
+            variable.set_data_value(value);
+            changed.push((id.clone(), AttributeId::Value));
         }
         handle.subscriptions().maybe_notify(
             changed.iter().map(|(node, attribute)| (node, *attribute)),
@@ -539,4 +564,14 @@ fn folder_id(namespace: u16, parts: &[&str]) -> NodeId {
         namespace,
         identifier: Identifier::ByteString(ByteString { value: Some(bytes) }),
     }
+}
+
+/// 変数の保存済みの DataValue（値・StatusCode・時刻）。
+fn current_value(variable: &Variable) -> DataValue {
+    variable.value(
+        TimestampsToReturn::Both,
+        &NumericRange::None,
+        &DataEncoding::Binary,
+        0.0,
+    )
 }

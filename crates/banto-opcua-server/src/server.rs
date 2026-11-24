@@ -364,11 +364,15 @@ impl RunningServer {
     /// （ADR-0008）。
     ///
     /// 同じ NodeId のまま書き換えられるのは、ノードの形（[`TagMetadata::shape`]。
-    /// 型定義と持つプロパティ）が同じときだけ。形が変わるならエラーを返し、何も
-    /// 変えない。そのときは [`Self::remove_tag`] と
-    /// [`Self::add_tag_reading_with_metadata`] で登録し直す。Description 属性と
-    /// プロパティの Value を購読しているクライアントへは、変更を通知する。
-    /// サンプルタグには付けられない。
+    /// 型定義と持つプロパティ）が同じときだけ。形が変わるなら
+    /// [`Error::MetadataShapeChanged`] を返し、何も変えない。そのときは
+    /// [`Self::remove_tag`] と [`Self::add_tag_reading_with_metadata`] で登録し直す。
+    /// 属性がタグの型に合わないときは [`Error::TagUpdate`]。
+    ///
+    /// Description 属性とプロパティの Value を購読しているクライアントへは、変更を
+    /// 通知する。単位・レンジ・文言の値が変わったら、タグ本体の Value の購読者にも
+    /// StatusCode に SemanticsChanged を立てて通知する（値・品質・時刻はそのまま。
+    /// 次の [`Self::update_tag_reading`] でビットは消える）。サンプルタグには付けられない。
     pub fn update_tag_metadata(
         &self,
         connection: &str,

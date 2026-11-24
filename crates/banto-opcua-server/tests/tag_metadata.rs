@@ -3,7 +3,7 @@
 use std::time::{Duration, SystemTime};
 
 use banto_opcua_server::{
-    OpcUaServer, RunningServer, ServerConfig, TagReading,
+    Error, OpcUaServer, RunningServer, ServerConfig, TagReading,
     model::{
         DataType, EngineeringUnits, EuRange, Quality, SampleTimestamps, TagMetadata,
         TwoStateLabels, UNECE_UNITS_NAMESPACE_URI,
@@ -544,5 +544,221 @@ async fn the_client_component_reads_back_the_published_metadata() {
     assert_eq!(results[4].status, ClientStatus::BAD_NODE_ID_UNKNOWN);
 
     client.disconnect().await.expect("切断する");
+    server.shutdown().await.expect("止める");
+}
+
+/// 監視項目ごとの通知を (NodeId, DataValue) で受ける購読を作る。
+async fn subscribe(
+    session: &Session,
+    nodes: &[NodeId],
+) -> mpsc::UnboundedReceiver<(NodeId, DataValue)> {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    let subscription = session
+        .create_subscription(
+            Duration::from_millis(50),
+            30,
+            10,
+            0,
+            0,
+            true,
+            DataChangeCallback::new(move |value, item| {
+                let _ = sender.send((item.item_to_monitor().node_id.clone(), value));
+            }),
+        )
+        .await
+        .expect("購読を作る");
+    let requests = nodes
+        .iter()
+        .map(|node| {
+            let mut request: MonitoredItemCreateRequest = node.clone().into();
+            request.requested_parameters.sampling_interval = 0.0;
+            request
+        })
+        .collect();
+    session
+        .create_monitored_items(subscription, TimestampsToReturn::Both, requests)
+        .await
+        .expect("監視項目を作る");
+    receiver
+}
+
+async fn next_change(
+    receiver: &mut mpsc::UnboundedReceiver<(NodeId, DataValue)>,
+) -> (NodeId, DataValue) {
+    tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+        .await
+        .expect("DataChange の待ち時間が切れた")
+        .expect("DataChange が届く")
+}
+
+async fn assert_quiet(receiver: &mut mpsc::UnboundedReceiver<(NodeId, DataValue)>) {
+    if let Ok(Some(change)) =
+        tokio::time::timeout(Duration::from_millis(500), receiver.recv()).await
+    {
+        panic!("通知は来ないはず: {change:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn semantic_changes_reach_value_subscribers_with_the_semantics_changed_bit() {
+    let server = OpcUaServer::start(ServerConfig::default().with_port(0).with_sample_tags(false))
+        .await
+        .expect("サーバーを起動する");
+    let sampled = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    server
+        .add_tag_reading_with_metadata(
+            CONNECTION,
+            GROUP,
+            "Temperature",
+            TagReading::new(
+                DataType::Double,
+                Some(850.0),
+                Quality::Good,
+                SampleTimestamps::new(Some(sampled), sampled),
+            ),
+            &temperature_metadata(),
+        )
+        .expect("登録する");
+    let (session, _pki) = connect(&server).await;
+    let temperature = tag_id(&server, "Temperature");
+
+    let range_node = property(&session, &temperature, "EURange").await;
+    assert_eq!(
+        read(&session, &range_node, AttributeId::AccessLevel)
+            .await
+            .value,
+        Some(Variant::Byte(1 | 16)),
+        "意味を決めるプロパティは CurrentRead と SemanticChange"
+    );
+
+    let mut changes = subscribe(&session, std::slice::from_ref(&temperature)).await;
+    let (_, first) = next_change(&mut changes).await;
+    assert_eq!(first.value, Some(Variant::Double(850.0)));
+    assert!(!first.status().semantics_changed());
+
+    server
+        .update_tag_metadata(
+            CONNECTION,
+            GROUP,
+            "Temperature",
+            &temperature_metadata().with_description("説明だけ変える"),
+        )
+        .expect("説明だけ変える");
+    assert_quiet(&mut changes).await;
+
+    server
+        .update_tag_metadata(
+            CONNECTION,
+            GROUP,
+            "Temperature",
+            &TagMetadata::new()
+                .with_engineering_units(EngineeringUnits::display("K").with_unece_code("KEL"))
+                .with_eu_range(EuRange::new(273.0, 1473.0)),
+        )
+        .expect("単位とレンジを変える");
+    let (_, changed) = next_change(&mut changes).await;
+    assert!(changed.status().semantics_changed(), "{changed:?}");
+    assert!(changed.status().is_good(), "品質は Good のまま");
+    assert_eq!(changed.value, Some(Variant::Double(850.0)), "値はそのまま");
+    assert_eq!(
+        changed.source_timestamp, first.source_timestamp,
+        "採取時刻もそのまま"
+    );
+
+    server
+        .update_tag_reading(
+            CONNECTION,
+            GROUP,
+            "Temperature",
+            reading(DataType::Double, 851.0),
+        )
+        .expect("値を更新する");
+    let (_, next) = next_change(&mut changes).await;
+    assert_eq!(next.value, Some(Variant::Double(851.0)));
+    assert!(
+        !next.status().semantics_changed(),
+        "次の値の更新でビットは消える"
+    );
+
+    let shape_change = server.update_tag_metadata(
+        CONNECTION,
+        GROUP,
+        "Temperature",
+        &TagMetadata::new().with_engineering_units(EngineeringUnits::display("K")),
+    );
+    assert!(
+        matches!(shape_change, Err(Error::MetadataShapeChanged(_))),
+        "形の変化は専用のエラー: {shape_change:?}"
+    );
+    let invalid = server.update_tag_metadata(
+        CONNECTION,
+        GROUP,
+        "Temperature",
+        &temperature_metadata().with_eu_range(EuRange::new(1.0, 0.0)),
+    );
+    assert!(
+        matches!(invalid, Err(Error::TagUpdate(_))),
+        "不正な属性は形の変化と区別する: {invalid:?}"
+    );
+
+    server.shutdown().await.expect("止める");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn property_subscriptions_resume_when_the_tag_is_registered_again() {
+    let server = OpcUaServer::start(ServerConfig::default().with_port(0).with_sample_tags(false))
+        .await
+        .expect("サーバーを起動する");
+    server
+        .add_tag_reading_with_metadata(
+            CONNECTION,
+            GROUP,
+            "Temperature",
+            reading(DataType::Double, 850.0),
+            &temperature_metadata(),
+        )
+        .expect("登録する");
+    let (session, _pki) = connect(&server).await;
+    let temperature = tag_id(&server, "Temperature");
+    let range_node = property(&session, &temperature, "EURange").await;
+    let units_node = property(&session, &temperature, "EngineeringUnits").await;
+    let mut changes = subscribe(&session, &[range_node.clone(), units_node.clone()]).await;
+    for _ in 0..2 {
+        let (_, value) = next_change(&mut changes).await;
+        assert!(value.status().is_good());
+    }
+
+    server
+        .remove_tag(CONNECTION, GROUP, "Temperature")
+        .expect("削除する");
+    for _ in 0..2 {
+        let (_, value) = next_change(&mut changes).await;
+        assert_eq!(value.status(), StatusCode::BadNodeIdUnknown);
+    }
+
+    // レンジだけで登録し直す。EURange は同じ NodeId で戻り、EngineeringUnits は無いまま。
+    server
+        .add_tag_reading_with_metadata(
+            CONNECTION,
+            GROUP,
+            "Temperature",
+            reading(DataType::Double, 850.0),
+            &TagMetadata::new().with_eu_range(EuRange::new(0.0, 900.0)),
+        )
+        .expect("登録し直す");
+    let (node, value) = next_change(&mut changes).await;
+    assert_eq!(node, range_node, "戻るのは EURange の購読");
+    assert!(value.status().is_good());
+    let range: Range = extension(&value);
+    assert_eq!((range.low, range.high), (0.0, 900.0));
+    assert_quiet(&mut changes).await;
+    assert_eq!(
+        read(&session, &units_node, AttributeId::Value)
+            .await
+            .status(),
+        StatusCode::BadNodeIdUnknown,
+        "登録し直さなかったプロパティは無いまま"
+    );
+
     server.shutdown().await.expect("止める");
 }

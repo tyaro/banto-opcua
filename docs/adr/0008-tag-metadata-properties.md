@@ -33,10 +33,21 @@ Description・EngineeringUnits・EURange が無く、渡す口も無かった。
   UaExpert など多くのクライアントは、型定義を見て単位やレンジを表示する。
   BaseDataVariableType に属性を足すより読み取りやすい。
 - **変更。** 型定義と、どのプロパティを持つか（ノードの形）が同じなら、同じ NodeId のまま
-  Description とプロパティの値を書き換え、購読者へ通知する。クライアントはプロパティの
-  Value（と Description 属性）を購読すれば変更を知れる。形が変わる変更（レンジを付ける・外す
-  など）は書き換えずにエラーを返す。利用する側はタグを削除して登録し直す。DataType の変更を
-  削除・再登録で表す ADR-0002 と同じ扱いで、購読者には `BadNodeIdUnknown` から復帰する形で伝わる。
+  Description とプロパティの値を書き換え、購読者へ通知する。
+  - 単位・レンジ・文言の値が変わったときは、タグ本体の Value の購読者にも、StatusCode に
+    SemanticsChanged のビットを立てた通知を送る（OPC 10000-8 5.2、BaseAnalogType・
+    TwoStateDiscreteType の規定）。値・品質・時刻はそのままで、次の値の更新でビットは消える。
+    説明だけの変更では立てない。
+  - 意味を決めるプロパティの AccessLevel には、CurrentRead に SemanticChange を足す
+    （OPC 10000-3 5.6.2）。書き換わりうるプロパティだとクライアントに知らせる。
+  - 利用する側（クライアント）は、SemanticsChanged のビットを見たらプロパティを読み直す。
+    プロパティの Value を購読していれば、新しい値も届く。
+  - 形が変わる変更（レンジを付ける・外すなど）は書き換えずに `Error::MetadataShapeChanged` を
+    返す。そのときに限り、利用する側はタグを削除して登録し直す。不正な属性（型に合わない、
+    レンジが逆など）は `Error::TagUpdate` で、登録し直しても通らない。DataType の変更を削除・
+    再登録で表す ADR-0002 と同じ扱いで、購読者には `BadNodeIdUnknown` から復帰する形で伝わる。
+  - 登録し直したときは、タグ本体と、作り直したプロパティの購読者へ通知し、同じ監視項目のまま
+    Good に戻す。登録し直さなかったプロパティの購読は `BadNodeIdUnknown` のまま残る。
 - **ModelChangeEvent は出さない。** async-opcua の `GeneralModelChangeEventType` は変更を
   配列でなく 1 件で持ち、NodeVersion の仕組みも無い。対応するクライアントも少ない。
   形の変化は上の削除・再登録で表し、値の変化は購読で伝える。
@@ -63,8 +74,10 @@ Description・EngineeringUnits・EURange が無く、渡す口も無かった。
 
 ## 帰結
 
-- ハブは、タグの単位などが変わったら、まず `update_tag_metadata` を呼ぶ。エラーなら
-  `remove_tag` と `add_tag_reading_with_metadata` で登録し直す（書き込み可の設定もやり直す）。
-- 記録する側は、プロパティの Value を購読するか、接続のたびに読み直す。
+- ハブは、タグの単位などが変わったら、まず `update_tag_metadata` を呼ぶ。
+  `Error::MetadataShapeChanged` のときだけ、`remove_tag` と `add_tag_reading_with_metadata` で
+  登録し直す（書き込み可の設定もやり直す）。
+- 記録する側は、SemanticsChanged のビットを見たらプロパティを読み直す（プロパティの Value を
+  購読していればそれでもよい）。接続のたびにも読み直す。
 - プロパティを足すときは、core の `MetadataShape` と、サーバーのプロパティの一覧・NodeId・
   削除の処理を同じ組に保つ。
