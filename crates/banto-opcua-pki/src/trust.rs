@@ -154,11 +154,17 @@ impl TrustList {
         Ok(None)
     }
 
-    /// 正規の名前でない証明書のファイルを、正規の名前（`<小文字の拇印>.der`）へ移す。
+    /// 旧い async-opcua が書いた名前の証明書のファイルを、正規の名前（`<小文字の拇印>.der`）へ移す。
     ///
-    /// 旧い async-opcua が `CN [拇印].der` の名前で書いた一覧を引き継ぐためのもの。
-    /// 同じ証明書が正規の名前で既にあれば、旧い方を消すだけにする。証明書として
-    /// 読めないファイルには触らない。移した数を返す。一覧のほかの操作も先にこれを呼ぶ。
+    /// 移すのは、旧い async-opcua が実際に照合していた名前（`<CN> [<小文字の拇印>].der`。
+    /// CN は `CN=` 付きで前後の空白と `/` を除いたもの）と、中身の証明書から作った
+    /// その名前が一致するファイルだけ。それ以外の名前のファイル（保管用に置いた
+    /// 証明書など）は旧い版でも信頼に使われていなかったので、触らず、信頼にも数えない。
+    /// 管理者が [`Self::add_trusted`] などで明示したときだけ一覧に入る。
+    ///
+    /// 移し先は一時ファイルに書いて名前を変えて確定し、読み戻して同じ証明書であることを
+    /// 確かめてから移し元を消す。移し先に正しい証明書が既にあれば、移し元を消すだけに
+    /// する。途中で失敗したら移し元は残る。移した数を返す。一覧のほかの操作も先にこれを呼ぶ。
     pub fn migrate(&self) -> io::Result<usize> {
         let mut moved = 0;
         for state in [TrustState::Trusted, TrustState::Rejected] {
@@ -170,10 +176,15 @@ impl TrustList {
                 let Some(cert) = read_certificate(&path)? else {
                     continue;
                 };
-                let target = dir.join(file_name(&cert));
-                if !target.try_exists()? {
-                    std::fs::write(&target, der_of(&cert)?)?;
+                if legacy_file_name(&cert).as_deref() != Some(name.as_str()) {
+                    continue;
                 }
+                let target = dir.join(file_name(&cert));
+                // 大文字・小文字を区別しないファイルシステムで、同じファイルを指していないか。
+                if same_file(&path, &target)? {
+                    continue;
+                }
+                write_verified(&target, &der_of(&cert)?)?;
                 std::fs::remove_file(&path)?;
                 tracing::info!(
                     from = %path.display(),
@@ -201,10 +212,7 @@ impl TrustList {
     fn place(&self, cert: &X509, state: TrustState) -> io::Result<()> {
         ensure_dirs(&self.dir)?;
         let path = self.dir.join(dir_name(state)).join(file_name(cert));
-        if path.try_exists()? {
-            return Ok(());
-        }
-        std::fs::write(path, der_of(cert)?)
+        write_verified(&path, &der_of(cert)?)
     }
 
     fn discard(&self, cert: &X509, state: TrustState) -> io::Result<()> {
@@ -257,6 +265,62 @@ fn file_name_for_thumbprint(thumbprint: &str) -> io::Result<String> {
             format!("拇印は 40 桁の 16 進で指定してください: {thumbprint}"),
         ))
     }
+}
+
+/// 旧い async-opcua（`CertificateStore::cert_file_name` を拇印だけにする前）が付けた名前。
+/// CN を読めなければ `None`。
+fn legacy_file_name(cert: &X509) -> Option<String> {
+    let prefix = cert.common_name().ok()?.trim().replace('/', "");
+    let thumbprint = info::thumbprint(cert).to_ascii_lowercase();
+    Some(if prefix.is_empty() {
+        format!("{thumbprint}.der")
+    } else {
+        format!("{prefix} [{thumbprint}].der")
+    })
+}
+
+/// `path` に `der` と同じ中身がある状態にする。既に同じ中身なら何もしない。
+///
+/// 違う中身（途中で切れた書き込みなど）なら、同じディレクトリの一時ファイルに書いて
+/// 名前を変えて置き換え、読み戻して確かめる。確かめられなければ `Err`。
+fn write_verified(path: &Path, der: &[u8]) -> io::Result<()> {
+    match std::fs::read(path) {
+        Ok(existing) if existing == der => return Ok(()),
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "ファイル名がありません"))?;
+    let temporary = path.with_file_name(format!(".{file_name}.tmp"));
+    {
+        use std::io::Write;
+
+        let mut file = std::fs::File::create(&temporary)?;
+        file.write_all(der)?;
+        file.sync_all()?;
+    }
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    if std::fs::read(path)? != der {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("書いた証明書を読み戻せません: {}", path.display()),
+        ));
+    }
+    Ok(())
+}
+
+/// 2 つのパスが同じファイルを指すか。片方が無ければ違うとする。
+fn same_file(a: &Path, b: &Path) -> io::Result<bool> {
+    if !a.try_exists()? || !b.try_exists()? {
+        return Ok(false);
+    }
+    Ok(std::fs::canonicalize(a)? == std::fs::canonicalize(b)?)
 }
 
 fn is_canonical_name(name: &str) -> bool {
@@ -414,37 +478,43 @@ mod tests {
         );
     }
 
+    /// 旧い async-opcua が付けた名前。
+    fn legacy(cert_der: &[u8]) -> String {
+        legacy_file_name(&X509::from_der(cert_der).expect("DER")).expect("CN がある")
+    }
+
     #[test]
-    fn legacy_names_are_migrated_in_place() {
+    fn legacy_names_match_the_old_async_opcua_format() {
+        let root = tempfile::tempdir().expect("試験用ディレクトリ");
+        let (der, summary) = peer(root.path(), "peer");
+        assert_eq!(
+            legacy(&der),
+            format!("CN=peer [{}].der", summary.thumbprint.to_ascii_lowercase())
+        );
+    }
+
+    #[test]
+    fn only_names_the_old_version_trusted_are_migrated() {
         let root = tempfile::tempdir().expect("試験用ディレクトリ");
         let list = TrustList::new(root.path().join("own"));
         let (der, summary) = peer(root.path(), "peer");
         let (other, other_summary) = peer(root.path(), "other");
+        let (spare, spare_summary) = peer(root.path(), "spare");
         ensure_dirs(list.pki_dir()).expect("一覧を作る");
-        let legacy = |name: &str| {
-            format!(
-                "CN={name} [{}].der",
-                if name == "peer" {
-                    summary.thumbprint.to_ascii_lowercase()
-                } else {
-                    other_summary.thumbprint.to_ascii_lowercase()
-                }
-            )
-        };
         let trusted = list.pki_dir().join("trusted");
-        std::fs::write(trusted.join(legacy("peer")), &der).expect("旧い名前で信頼");
+        std::fs::write(trusted.join(legacy(&der)), &der).expect("旧い名前で信頼");
+        std::fs::write(list.pki_dir().join("rejected").join(legacy(&other)), &other)
+            .expect("旧い名前で拒否");
+        // 旧い版も照合しなかった名前。保管用に置いただけの証明書は信頼に変えない。
+        std::fs::write(trusted.join("backup.der"), &spare).expect("任意の名前");
         std::fs::write(
-            list.pki_dir().join("rejected").join(legacy("other")),
-            &other,
+            trusted.join(legacy(&der).replace("CN=peer", "CN=renamed")),
+            &spare,
         )
-        .expect("旧い名前で拒否");
-        // 同じ証明書が正規の名前でもある。旧い方は消すだけ。
-        let cert = X509::from_der(&der).expect("DER");
-        std::fs::write(trusted.join("CN=dup [x].der"), &der).expect("重複");
-        std::fs::write(stored(&list, &cert, TrustState::Trusted), &der).expect("正規");
+        .expect("中身と合わない旧い形の名前");
         std::fs::write(trusted.join("README.txt"), b"keep").expect("無関係なファイル");
 
-        assert_eq!(list.migrate().expect("移す"), 3);
+        assert_eq!(list.migrate().expect("移す"), 2);
         assert_eq!(
             list.state_of(&summary.thumbprint).expect("状態"),
             Some(TrustState::Trusted)
@@ -453,7 +523,12 @@ mod tests {
             list.state_of(&other_summary.thumbprint).expect("状態"),
             Some(TrustState::Rejected)
         );
-        let names: Vec<_> = std::fs::read_dir(&trusted)
+        assert_eq!(
+            list.state_of(&spare_summary.thumbprint).expect("状態"),
+            None,
+            "任意の名前の証明書は承認なしで信頼しない"
+        );
+        let names: std::collections::BTreeSet<_> = std::fs::read_dir(&trusted)
             .expect("読む")
             .map(|entry| {
                 entry
@@ -463,14 +538,52 @@ mod tests {
                     .expect("名前")
             })
             .collect();
-        let names: std::collections::BTreeSet<_> = names.into_iter().collect();
-        assert_eq!(
-            names,
-            ["README.txt".to_owned(), file_name(&cert)]
-                .into_iter()
-                .collect()
-        );
+        let cert = X509::from_der(&der).expect("DER");
+        assert!(names.contains(&file_name(&cert)));
+        assert!(!names.contains(&legacy(&der)), "移し元は消える");
+        assert!(names.contains("backup.der") && names.contains("README.txt"));
         assert_eq!(list.migrate().expect("2 回目"), 0);
+    }
+
+    /// 移し先に壊れたファイルが残っていても、正しく置き直してから移し元を消す。
+    #[test]
+    fn migration_repairs_a_broken_target_before_removing_the_source() {
+        let root = tempfile::tempdir().expect("試験用ディレクトリ");
+        let list = TrustList::new(root.path().join("own"));
+        let (der, summary) = peer(root.path(), "peer");
+        let cert = X509::from_der(&der).expect("DER");
+        ensure_dirs(list.pki_dir()).expect("一覧を作る");
+        let trusted = list.pki_dir().join("trusted");
+        std::fs::write(trusted.join(legacy(&der)), &der).expect("旧い名前で信頼");
+        let target = stored(&list, &cert, TrustState::Trusted);
+        std::fs::write(&target, &der[..der.len() / 2]).expect("途中で切れた移し先");
+
+        assert_eq!(list.migrate().expect("移す"), 1);
+        assert_eq!(std::fs::read(&target).expect("移し先"), der);
+        assert!(!trusted.join(legacy(&der)).exists());
+        assert_eq!(
+            list.state_of(&summary.thumbprint).expect("状態"),
+            Some(TrustState::Trusted)
+        );
+    }
+
+    /// 壊れた既存のファイルを、置き済みとして扱わない。
+    #[test]
+    fn placing_over_a_broken_file_rewrites_it() {
+        let root = tempfile::tempdir().expect("試験用ディレクトリ");
+        let list = TrustList::new(root.path().join("own"));
+        let (der, summary) = peer(root.path(), "peer");
+        let cert = X509::from_der(&der).expect("DER");
+        ensure_dirs(list.pki_dir()).expect("一覧を作る");
+        let path = stored(&list, &cert, TrustState::Trusted);
+        std::fs::write(&path, b"broken").expect("壊れたファイル");
+        assert_eq!(list.state_of(&summary.thumbprint).expect("状態"), None);
+        list.add_trusted(&der).expect("置き直す");
+        assert_eq!(std::fs::read(&path).expect("読む"), der);
+        assert_eq!(
+            list.state_of(&summary.thumbprint).expect("状態"),
+            Some(TrustState::Trusted)
+        );
     }
 
     #[test]
