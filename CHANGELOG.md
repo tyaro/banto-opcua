@@ -25,7 +25,7 @@
 
 ### 変更
 
-- async-opcua の固定を、fork の 4 コミットを上流の master（`ca18bb73`）に載せ直し、キューがあふれたり、保留した値が置き換わったりしても SemanticsChanged を次の通知へ引き継ぐ修正を重ねた `0b9e245` へ移した（ADR-0001、#59）。上流の暗号まわりの依存の更新で `rsa` は 0.10.0 になり、RUSTSEC-2023-0071 の ignore と、使われなくなった BSD-2-Clause・BSD-3-Clause の許可を `deny.toml` から外した。
+- async-opcua の固定を、fork の 4 コミットを上流の master（`ca18bb73`）に載せ直し、キューがあふれたり、保留した値が置き換わったりしても SemanticsChanged を次の通知へ引き継ぐ修正を重ねた `2d33e62` へ移した（ADR-0001、#59）。上流の暗号まわりの依存の更新で `rsa` は 0.10.0 になり、RUSTSEC-2023-0071 の ignore と、使われなくなった BSD-2-Clause・BSD-3-Clause の許可を `deny.toml` から外した。
 - `publish_decision` と `PublishDecision` を廃止した。`publish_data_type` に置き換える。`string` のタグも String で公開する。
 - `TagReading::value` を `Option<f64>` から `Option<MappedValue>` にした。`TagReading::new` は `Option<f64>` を受けたまま `from_number` で変える（`const fn` ではなくなった）。
 - `MappedValue`・`MappedReading`・`TagReading` は `Copy` ではなくなった（String を持つため）。

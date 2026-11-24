@@ -674,6 +674,21 @@ async fn semantic_changes_reach_value_subscribers_with_the_semantics_changed_bit
         "ビットは通知だけに付け、通常の Read には出さない: {read_after:?}"
     );
 
+    // 値が変わらないまま、もう一度単位を変えても届く。
+    server
+        .update_tag_metadata(
+            CONNECTION,
+            GROUP,
+            "Temperature",
+            &TagMetadata::new()
+                .with_engineering_units(EngineeringUnits::display("°F").with_unece_code("FAH"))
+                .with_eu_range(EuRange::new(32.0, 2192.0)),
+        )
+        .expect("もう一度単位とレンジを変える");
+    let (_, again) = next_change(&mut changes).await;
+    assert!(again.status().semantics_changed(), "{again:?}");
+    assert_eq!(again.value, Some(Variant::Double(850.0)));
+
     server
         .update_tag_reading(
             CONNECTION,
