@@ -175,10 +175,6 @@ banto の ADR-0011 に合わせ、git タグで配布する（最初のタグは
 未決のため `publish = false`。消費側は `Cargo.lock` の再現性を保つため、
 タグを固定して依存する（banto-industrial の `slmp` と同じ）。
 
-## 既知の依存の注意
-
-`rsa` 0.9.10（`async-opcua-crypto` 経由）の RUSTSEC-2023-0071 を、見直し期日付きで `deny.toml` が無視している。理由と期限は [ADR-0001](docs/adr/0001-async-opcua-base.md)。
-
 ## 決定事項
 
 2026-10-15 のオーナー決定。

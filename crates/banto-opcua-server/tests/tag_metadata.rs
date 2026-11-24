@@ -902,3 +902,80 @@ async fn units_are_read_from_nodes_without_a_description_attribute() {
     client.disconnect().await.expect("切断する");
     task.abort();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn semantics_changed_survives_a_queue_of_one_overwritten_before_publish() {
+    let server = OpcUaServer::start(ServerConfig::default().with_port(0).with_sample_tags(false))
+        .await
+        .expect("サーバーを起動する");
+    server
+        .add_tag_reading_with_metadata(
+            CONNECTION,
+            GROUP,
+            "Temperature",
+            reading(DataType::Double, 850.0),
+            &temperature_metadata(),
+        )
+        .expect("登録する");
+    let (session, _pki) = connect(&server).await;
+    let temperature = tag_id(&server, "Temperature");
+
+    // Publish の間隔を長くし、ビット付きの通知と次の値が同じ Publish の前に入るようにする。
+    let (sender, mut changes) = mpsc::unbounded_channel();
+    let subscription = session
+        .create_subscription(
+            Duration::from_millis(1000),
+            30,
+            10,
+            0,
+            0,
+            true,
+            DataChangeCallback::new(move |value, _item| {
+                let _ = sender.send(value);
+            }),
+        )
+        .await
+        .expect("購読を作る");
+    let mut request: MonitoredItemCreateRequest = temperature.clone().into();
+    request.requested_parameters.sampling_interval = 0.0;
+    request.requested_parameters.queue_size = 1;
+    request.requested_parameters.discard_oldest = true;
+    session
+        .create_monitored_items(subscription, TimestampsToReturn::Both, vec![request])
+        .await
+        .expect("キュー 1 の監視項目を作る");
+    let first = recv(&mut changes).await;
+    assert_eq!(first.value, Some(Variant::Double(850.0)));
+
+    server
+        .update_tag_metadata(
+            CONNECTION,
+            GROUP,
+            "Temperature",
+            &TagMetadata::new()
+                .with_engineering_units(EngineeringUnits::display("K").with_unece_code("KEL"))
+                .with_eu_range(EuRange::new(273.0, 1473.0)),
+        )
+        .expect("単位とレンジを変える");
+    server
+        .update_tag_reading(
+            CONNECTION,
+            GROUP,
+            "Temperature",
+            reading(DataType::Double, 851.0),
+        )
+        .expect("すぐに値を更新する");
+
+    let next = recv(&mut changes).await;
+    assert_eq!(
+        next.value,
+        Some(Variant::Double(851.0)),
+        "キュー 1 なのでビット付きの通知は次の値に上書きされる"
+    );
+    assert!(
+        next.status().semantics_changed(),
+        "捨てた通知の SemanticsChanged は次の通知に引き継ぐ（OPC 10000-4 7.38.1）: {next:?}"
+    );
+
+    server.shutdown().await.expect("止める");
+}
