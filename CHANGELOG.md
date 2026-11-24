@@ -5,6 +5,14 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-24
+
+利用者が取り込む crate の中身は 0.3.0 と同じ。v0.3.0 のタグを付けた後にマージした CI の更新を含める。
+
+### 変更
+
+- CI で使う `taiki-e/install-action` を 2.89.1 から 2.90.5 に上げた（#53）。
+
 ## [0.3.0] - 2026-11-24
 
 数値と文字列のタグを元の型のまま公開する（ADR-0007、#56）。公開 API に互換でない変更がある。
@@ -129,7 +137,8 @@ ADR-0004 の書き込みハンドラーに通す Write を含む。
 - 自由関数 `endpoint_url` を公開 API から外した。`ServerConfig::endpoint_url` を使う。
 - `RunningServer::namespace_index()` を追加。`Error::TagUpdate` の表示文言をタグ操作全般に合わせた。
 
-[Unreleased]: https://github.com/tyaro/banto-opcua/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/tyaro/banto-opcua/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/tyaro/banto-opcua/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/tyaro/banto-opcua/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/tyaro/banto-opcua/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/tyaro/banto-opcua/releases/tag/v0.1.0
