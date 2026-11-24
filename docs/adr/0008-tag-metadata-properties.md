@@ -40,7 +40,7 @@ Description・EngineeringUnits・EURange が無く、渡す口も無かった。
     保存した値には立てないので、通常の Read には出ない。説明だけの変更では立てない。
   - 既知の制限: 監視項目のキューがあふれてビット付きの通知が捨てられたとき、OPC 10000-4 7.38.1 は
     次の通知へビットを引き継ぐよう求めるが、async-opcua のキューはこれをしない。直すには
-    async-opcua 側の変更が要る。
+    async-opcua 側の変更が要る（[#59](https://github.com/tyaro/banto-opcua/issues/59)）。
   - 意味を決めるプロパティの AccessLevel には、CurrentRead に SemanticChange を足す
     （OPC 10000-3 5.6.2）。書き換わりうるプロパティだとクライアントに知らせる。
   - 利用する側（クライアント）は、SemanticsChanged のビットを見たらプロパティを読み直す。
