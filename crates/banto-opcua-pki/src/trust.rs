@@ -185,7 +185,11 @@ impl TrustList {
                     continue;
                 }
                 write_verified(&target, &der_of(&cert)?)?;
-                std::fs::remove_file(&path)?;
+                match std::fs::remove_file(&path) {
+                    // 並行する移行が先に消した。移し先は上で確かめてある。
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    other => other?,
+                }
                 tracing::info!(
                     from = %path.display(),
                     to = %target.display(),
@@ -281,46 +285,88 @@ fn legacy_file_name(cert: &X509) -> Option<String> {
 
 /// `path` に `der` と同じ中身がある状態にする。既に同じ中身なら何もしない。
 ///
-/// 違う中身（途中で切れた書き込みなど）なら、同じディレクトリの一時ファイルに書いて
-/// 名前を変えて置き換え、読み戻して確かめる。確かめられなければ `Err`。
+/// 違う中身（途中で切れた書き込みなど）なら、この呼び出しだけの一時ファイルを同じ
+/// ディレクトリに排他的に作って書き、名前を変えて置き換え、読み戻して確かめる。
+/// 同じ証明書を並行して置く操作があっても、互いの一時ファイルには触らない。名前の
+/// 変更に失敗しても、`path` が既に正しい中身なら（ほかの操作が先に置いた）成功とする。
+/// 失敗したときは自分の一時ファイルだけを消す。
 fn write_verified(path: &Path, der: &[u8]) -> io::Result<()> {
-    match std::fs::read(path) {
-        Ok(existing) if existing == der => return Ok(()),
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
+    if holds(path, der)? {
+        return Ok(());
     }
+    let (temporary, mut file) = create_temporary(path)?;
+    let written = {
+        use std::io::Write;
+
+        file.write_all(der).and_then(|()| file.sync_all())
+    };
+    drop(file);
+    if let Err(error) = written.and_then(|()| std::fs::rename(&temporary, path)) {
+        let _ = std::fs::remove_file(&temporary);
+        return if holds(path, der)? {
+            Ok(())
+        } else {
+            Err(error)
+        };
+    }
+    if holds(path, der)? {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("書いた証明書を読み戻せません: {}", path.display()),
+        ))
+    }
+}
+
+/// `path` の中身が `der` と同じか。無ければ `false`。
+fn holds(path: &Path, der: &[u8]) -> io::Result<bool> {
+    match std::fs::read(path) {
+        Ok(existing) => Ok(existing == der),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// `path` の隣に、この呼び出しだけの一時ファイルを `create_new` で作る。名前は
+/// プロセス ID と連番で分け、既にあれば次の番号を試す。
+fn create_temporary(path: &Path) -> io::Result<(PathBuf, std::fs::File)> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "ファイル名がありません"))?;
-    let temporary = path.with_file_name(format!(".{file_name}.tmp"));
-    {
-        use std::io::Write;
-
-        let mut file = std::fs::File::create(&temporary)?;
-        file.write_all(der)?;
-        file.sync_all()?;
-    }
-    if let Err(error) = std::fs::rename(&temporary, path) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(error);
-    }
-    if std::fs::read(path)? != der {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("書いた証明書を読み戻せません: {}", path.display()),
+    loop {
+        let temporary = path.with_file_name(format!(
+            ".{file_name}.{}-{}.tmp",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => return Ok((temporary, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
     }
-    Ok(())
 }
 
 /// 2 つのパスが同じファイルを指すか。片方が無ければ違うとする。
 fn same_file(a: &Path, b: &Path) -> io::Result<bool> {
-    if !a.try_exists()? || !b.try_exists()? {
-        return Ok(false);
-    }
-    Ok(std::fs::canonicalize(a)? == std::fs::canonicalize(b)?)
+    let canonical = |path: &Path| match std::fs::canonicalize(path) {
+        Ok(path) => Ok(Some(path)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    };
+    Ok(match (canonical(a)?, canonical(b)?) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    })
 }
 
 fn is_canonical_name(name: &str) -> bool {
@@ -353,9 +399,14 @@ fn list_files(dir: &Path) -> io::Result<Vec<(PathBuf, String)>> {
     Ok(files)
 }
 
-/// 証明書のファイルを読む。読めなければ（I/O の失敗）`Err`、証明書として解釈できなければ `None`。
+/// 証明書のファイルを読む。読めなければ（I/O の失敗）`Err`、無いか証明書として解釈できなければ `None`。
 fn read_certificate(path: &Path) -> io::Result<Option<X509>> {
-    let bytes = std::fs::read(path)?;
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        // 一覧を読んでから開くまでに、並行する操作が消した。
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
     let cert = X509::from_der(&bytes).or_else(|_| X509::from_pem(&bytes));
     if cert.is_err() {
         tracing::debug!(path = %path.display(), "証明書として読めないファイルを飛ばします");
@@ -584,6 +635,54 @@ mod tests {
             list.state_of(&summary.thumbprint).expect("状態"),
             Some(TrustState::Trusted)
         );
+    }
+
+    /// 同じ一覧で、同じ証明書の移行と信頼を並行して行っても、壊れず信頼に落ち着き、
+    /// 一時ファイルも残らない。
+    #[test]
+    fn concurrent_operations_on_one_certificate_settle() {
+        let root = tempfile::tempdir().expect("試験用ディレクトリ");
+        let list = TrustList::new(root.path().join("own"));
+        let (der, summary) = peer(root.path(), "peer");
+        let cert = X509::from_der(&der).expect("DER");
+        for round in 0..20 {
+            ensure_dirs(list.pki_dir()).expect("一覧を作る");
+            let trusted = list.pki_dir().join("trusted");
+            std::fs::write(trusted.join(legacy(&der)), &der).expect("旧い名前で信頼");
+            std::thread::scope(|scope| {
+                let workers: Vec<_> = (0..8)
+                    .map(|worker| {
+                        let list = list.clone();
+                        let der = der.clone();
+                        scope.spawn(move || match worker % 3 {
+                            0 => list.migrate().map(|_| ()),
+                            1 => list.add_trusted(&der).map(|_| ()),
+                            _ => list.certificates().map(|_| ()),
+                        })
+                    })
+                    .collect();
+                for worker in workers {
+                    worker.join().expect("スレッド").expect("操作は成功する");
+                }
+            });
+            assert_eq!(
+                list.state_of(&summary.thumbprint).expect("状態"),
+                Some(TrustState::Trusted),
+                "{round} 回目"
+            );
+            assert_eq!(
+                std::fs::read(stored(&list, &cert, TrustState::Trusted)).expect("読む"),
+                der
+            );
+            let leftovers: Vec<_> = std::fs::read_dir(&trusted)
+                .expect("読む")
+                .map(|entry| entry.expect("項目").file_name())
+                .filter(|name| name.to_string_lossy().ends_with(".tmp"))
+                .collect();
+            assert!(leftovers.is_empty(), "{leftovers:?}");
+            list.remove(&summary.thumbprint)
+                .expect("次の回のために消す");
+        }
     }
 
     #[test]
