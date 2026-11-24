@@ -1,12 +1,12 @@
-//! サーバーの待受設定と書き込みの上限。SecurityPolicy と認証の項目は Phase 3 まで置かない。
-//! 例外として、自己署名の鍵と証明書の保存先だけを [`ServerConfig::pki_dir`] に
-//! 置く（[ADR-0003](https://github.com/tyaro/banto-opcua/blob/main/docs/adr/0003-persistent-pki-dir.md)）。
+//! サーバーの待受設定、通信の保護と利用者の認証（ADR-0009）、書き込みの上限。
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     num::NonZeroUsize,
     path::PathBuf,
 };
+
+use banto_opcua_core::{MessageSecurityMode, SecurityPolicy};
 
 /// OPC UA サーバーの待受設定。
 ///
@@ -25,7 +25,8 @@ pub struct ServerConfig {
     pub endpoint_path: String,
     /// ApplicationName。
     pub application_name: String,
-    /// ApplicationUri。証明書の URI と揃えるのは Phase 3。
+    /// ApplicationUri。自分の証明書の SubjectAltName の URI にも載せる。変えると
+    /// 証明書を作り直す（ADR-0009）。
     pub application_uri: String,
     /// ProductUri。
     pub product_uri: String,
@@ -41,15 +42,15 @@ pub struct ServerConfig {
     /// （`0.0.0.0` / `::`）で待受するときは必須。IPv6 は括弧なしでもよい。
     /// DNS 名の末尾のドットは URL に載せるときに除く。
     pub advertised_host: Option<String>,
-    /// サーバーの自己署名証明書と秘密鍵を置くディレクトリ。
+    /// サーバーの自己署名の鍵と証明書、クライアントの証明書の信頼の一覧を置くディレクトリ
+    /// （ADR-0003、ADR-0009）。中の配置は [`banto_opcua_pki`] を見る。
     ///
-    /// 未設定なら起動ごとに一時ディレクトリへ RSA 鍵を作り、停止で消す。
-    /// 設定すると、そこに鍵と証明書が無いときだけ作り、以降の起動では
-    /// 再利用する。ディレクトリが無ければ作る。片方だけ残っていたら消して
+    /// 未設定なら起動ごとに一時ディレクトリへ作り、停止で消す。そのときは信頼の一覧も
+    /// 起動ごとに空から始まるので、試験のほかは設定する。設定すると、鍵と証明書が
+    /// 無いか、ApplicationUri・公開ホストが載っていないか、有効期間の外のときだけ作り、
+    /// 以降の起動では再利用する。ディレクトリが無ければ作る。片方だけ残っていたら消して
     /// 組で作り直す。存在を確かめられない（権限エラーなど）ときは何も消さず、
     /// 起動を止める。書き込めないなどで組を作れなかったときも起動を止める。
-    /// 壊れたファイルは検証しないので、そのときは両方を消す。
-    /// SecurityPolicy は `None` のままで、鍵は通信の暗号化に使わない。
     ///
     /// Unix では鍵の生成前に秘密鍵のディレクトリを所有者だけのものにし、
     /// 生成後に秘密鍵も所有者だけが読めるようにする。Windows の ACL は
@@ -72,6 +73,30 @@ pub struct ServerConfig {
     /// 上限に達しているノードは、ハンドラーを呼ばずに `BadResourceUnavailable`
     /// にする。待ち行列にはしない（ADR-0004）。
     pub max_concurrent_writes: NonZeroUsize,
+    /// 開く SecurityPolicy（`None` 以外）。既定は [`SecurityPolicy::SECURE`] の 3 つ。
+    ///
+    /// [`Self::security_modes`] の各モードと組んでエンドポイントにする。`None` は
+    /// ここではなく [`Self::none_endpoint`] で開く。空にすると暗号化したエンドポイントを
+    /// 開かない（`none_endpoint` も無ければ起動はエラー）。
+    pub security_policies: Vec<SecurityPolicy>,
+    /// 開く MessageSecurityMode（`None` 以外）。既定は Sign と SignAndEncrypt。
+    pub security_modes: Vec<MessageSecurityMode>,
+    /// SecurityPolicy `None` / MessageSecurityMode `None` のエンドポイントも開く。既定は開かない。
+    ///
+    /// 平文になるので、試験と診断のためのもの。このエンドポイントでは Anonymous だけを
+    /// 受け付け、UserName は受け付けない（パスワードが平文になる）。Anonymous を
+    /// 許していないのに開こうとすると、起動はエラーになる。
+    pub none_endpoint: bool,
+    /// Anonymous のセッションを受け付ける。既定は受け付ける。
+    ///
+    /// 受け付けないなら、利用者の照合（[`crate::ServerHandlers::user_authenticator`]）を
+    /// 渡す。どちらも無いと誰も接続できないので、起動はエラーになる。
+    pub allow_anonymous: bool,
+    /// 知らないクライアントの証明書も信頼の一覧へ入れて受け付ける。試験用で、既定は入れない。
+    ///
+    /// 有効にすると、証明書を持つ誰でも暗号化したエンドポイントへ接続できる。
+    /// 起動時に警告ログを出す。
+    pub trust_all_client_certificates: bool,
 }
 
 const DEFAULT_MAX_NODES_PER_READ: NonZeroUsize = NonZeroUsize::new(10_000).unwrap();
@@ -94,6 +119,11 @@ impl Default for ServerConfig {
             max_nodes_per_read: DEFAULT_MAX_NODES_PER_READ,
             max_nodes_per_write: DEFAULT_MAX_NODES_PER_WRITE,
             max_concurrent_writes: DEFAULT_MAX_CONCURRENT_WRITES,
+            security_policies: SecurityPolicy::SECURE.to_vec(),
+            security_modes: MessageSecurityMode::SECURE.to_vec(),
+            none_endpoint: false,
+            allow_anonymous: true,
+            trust_all_client_certificates: false,
         }
     }
 }
@@ -178,6 +208,83 @@ impl ServerConfig {
         self
     }
 
+    /// 開く SecurityPolicy を設定する。重複は 1 つにする。
+    pub fn with_security_policies(
+        mut self,
+        policies: impl IntoIterator<Item = SecurityPolicy>,
+    ) -> Self {
+        self.security_policies = dedup(policies);
+        self
+    }
+
+    /// 開く MessageSecurityMode を設定する。重複は 1 つにする。
+    pub fn with_security_modes(
+        mut self,
+        modes: impl IntoIterator<Item = MessageSecurityMode>,
+    ) -> Self {
+        self.security_modes = dedup(modes);
+        self
+    }
+
+    /// SecurityPolicy `None` のエンドポイントも開くか選ぶ。
+    pub fn with_none_endpoint(mut self, enabled: bool) -> Self {
+        self.none_endpoint = enabled;
+        self
+    }
+
+    /// Anonymous のセッションを受け付けるか選ぶ。
+    pub fn with_anonymous(mut self, allowed: bool) -> Self {
+        self.allow_anonymous = allowed;
+        self
+    }
+
+    /// 知らないクライアントの証明書も信頼するか選ぶ（試験用）。
+    pub fn with_trust_all_client_certificates(mut self, enabled: bool) -> Self {
+        self.trust_all_client_certificates = enabled;
+        self
+    }
+
+    /// 開くエンドポイントの (SecurityPolicy, MessageSecurityMode) の組。`None` が先頭。
+    ///
+    /// 組み合わせが成り立たない（`None` を `security_policies` や `security_modes` に
+    /// 入れた、エンドポイントが 1 つも無い、`None` のエンドポイントで Anonymous を
+    /// 許していない）ときは理由を返す。
+    pub(crate) fn endpoint_security(
+        &self,
+    ) -> Result<Vec<(SecurityPolicy, MessageSecurityMode)>, String> {
+        if self.security_policies.contains(&SecurityPolicy::None) {
+            return Err(
+                "security_policies に None は入れられません。with_none_endpoint を使ってください"
+                    .to_owned(),
+            );
+        }
+        if self.security_modes.contains(&MessageSecurityMode::None) {
+            return Err(
+                "security_modes に None は入れられません。with_none_endpoint を使ってください"
+                    .to_owned(),
+            );
+        }
+        if self.none_endpoint && !self.allow_anonymous {
+            return Err(
+                "None のエンドポイントは Anonymous だけを受け付けます。Anonymous を許さないなら開けません"
+                    .to_owned(),
+            );
+        }
+        let mut endpoints = Vec::new();
+        if self.none_endpoint {
+            endpoints.push((SecurityPolicy::None, MessageSecurityMode::None));
+        }
+        for &policy in &self.security_policies {
+            for &mode in &self.security_modes {
+                endpoints.push((policy, mode));
+            }
+        }
+        if endpoints.is_empty() {
+            return Err("開くエンドポイントがありません".to_owned());
+        }
+        Ok(endpoints)
+    }
+
     /// 空や空白だけの `advertised_host` は未設定として扱う。
     pub(crate) fn explicit_advertised_host(&self) -> Option<&str> {
         self.advertised_host
@@ -206,6 +313,16 @@ impl ServerConfig {
             normalize_endpoint_path(&self.endpoint_path)
         )
     }
+}
+
+fn dedup<T: PartialEq>(items: impl IntoIterator<Item = T>) -> Vec<T> {
+    let mut unique = Vec::new();
+    for item in items {
+        if !unique.contains(&item) {
+            unique.push(item);
+        }
+    }
+    unique
 }
 
 /// `advertised_host` が単体のホスト名または IP アドレスか。
@@ -311,6 +428,53 @@ mod tests {
         assert_eq!(config.endpoint_path, "/");
         assert_eq!(config.advertised_host, None);
         assert_eq!(config.pki_dir, None);
+    }
+
+    #[test]
+    fn default_endpoints_are_encrypted_only() {
+        let endpoints = ServerConfig::default()
+            .endpoint_security()
+            .expect("既定は成り立つ");
+        assert_eq!(endpoints.len(), 6);
+        assert!(
+            endpoints
+                .iter()
+                .all(|&(policy, mode)| policy != SecurityPolicy::None
+                    && mode != MessageSecurityMode::None)
+        );
+        let with_none = ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_security_policies([
+                SecurityPolicy::Basic256Sha256,
+                SecurityPolicy::Basic256Sha256,
+            ])
+            .with_security_modes([MessageSecurityMode::SignAndEncrypt])
+            .endpoint_security()
+            .expect("None と 1 つ");
+        assert_eq!(
+            with_none,
+            [
+                (SecurityPolicy::None, MessageSecurityMode::None),
+                (
+                    SecurityPolicy::Basic256Sha256,
+                    MessageSecurityMode::SignAndEncrypt
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn inconsistent_security_is_rejected() {
+        for config in [
+            ServerConfig::default().with_security_policies([SecurityPolicy::None]),
+            ServerConfig::default().with_security_modes([MessageSecurityMode::None]),
+            ServerConfig::default()
+                .with_none_endpoint(true)
+                .with_anonymous(false),
+            ServerConfig::default().with_security_policies([]),
+        ] {
+            assert!(config.endpoint_security().is_err(), "{config:?}");
+        }
     }
 
     #[test]

@@ -35,3 +35,4 @@
 | [0006](0006-client-subscription-latest-values.md) | クライアントの購読モードでは、購読で受けた最新値を部品が持つ | Proposed |
 | [0007](0007-publish-native-data-types.md) | 数値と文字列のタグを元の型のまま公開する | Accepted |
 | [0008](0008-tag-metadata-properties.md) | タグの説明・単位・レンジを、変数ノードの Description と標準のプロパティで公開する | Accepted |
+| [0009](0009-phase3-security.md) | 暗号化したエンドポイントを既定にし、利用者の照合と証明書の信頼の一覧を利用する側へ渡す | Accepted |

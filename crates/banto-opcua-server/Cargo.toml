@@ -1,5 +1,6 @@
 # OPC UA サーバー。タグの Browse / Read / Subscription と、利用者の書き込み
 # ハンドラーに通す Write（ADR-0004）。ハンドラーを渡さなければ読み取り専用。
+# 暗号化したエンドポイント、UserName の照合、証明書の信頼の一覧（ADR-0009）。
 [package]
 name = "banto-opcua-server"
 description = "banto OPC UA サーバー。既定の待受は 127.0.0.1、書き込みは利用者のハンドラーを通す"
@@ -15,6 +16,7 @@ async-opcua = { workspace = true, features = ["server"] }
 # async-opcua の InMemoryNodeManagerImpl を実装するため（ADR-0004）。依存木には既にある。
 async-trait = "0.1"
 banto-opcua-core = { workspace = true }
+banto-opcua-pki = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }

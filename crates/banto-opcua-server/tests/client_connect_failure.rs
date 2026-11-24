@@ -17,6 +17,7 @@ async fn stalled_session_closes_after_timeout_and_cancellation() {
     // セッション用 TCP を再接続する。この挙動が変わるとプロキシの前提も変わる。
     // 同じポートで Discovery とセッションを別のループバック IP へ振り分ける。
     let config = ServerConfig::default()
+        .with_none_endpoint(true)
         .with_bind(Ipv4Addr::new(127, 0, 0, 2).into())
         .with_port(0);
     let server = OpcUaServer::start(config).await.expect("server starts");

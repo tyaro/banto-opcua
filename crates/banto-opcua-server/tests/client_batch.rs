@@ -32,7 +32,12 @@ async fn connect(config: ClientConfig) -> ConnectedClient {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn batch_read_returns_each_node_in_request_order() {
-    let server = start(ServerConfig::default().with_port(0)).await;
+    let server = start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0),
+    )
+    .await;
     let sampled_at = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
     server
         .add_tag_reading(
@@ -94,6 +99,7 @@ async fn batch_read_returns_each_node_in_request_order() {
 async fn read_is_split_by_the_advertised_max_nodes_per_read() {
     let server = start(
         ServerConfig::default()
+            .with_none_endpoint(true)
             .with_port(0)
             .with_max_nodes_per_read(NonZeroUsize::new(2).unwrap()),
     )
@@ -130,6 +136,7 @@ async fn read_is_split_by_the_advertised_max_nodes_per_read() {
 async fn connects_and_reads_when_the_server_allows_one_node_per_read() {
     let server = start(
         ServerConfig::default()
+            .with_none_endpoint(true)
             .with_port(0)
             .with_max_nodes_per_read(NonZeroUsize::new(1).unwrap()),
     )
@@ -160,7 +167,12 @@ async fn connects_and_reads_when_the_server_allows_one_node_per_read() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stopped_server_fails_later_calls_without_reconnecting() {
-    let server = start(ServerConfig::default().with_port(0)).await;
+    let server = start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0),
+    )
+    .await;
     let port = server.local_addr().port();
     let client = connect(ClientConfig::new(server.endpoint())).await;
     let nodes = [address("i=2259")];
@@ -170,7 +182,12 @@ async fn stopped_server_fails_later_calls_without_reconnecting() {
     assert!(client.read_batch(&nodes).await.is_err());
 
     // 同じポートでサーバーが戻っても、張り直さない。
-    let restarted = start(ServerConfig::default().with_port(port)).await;
+    let restarted = start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(port),
+    )
+    .await;
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert!(matches!(
         client.read_batch(&nodes).await,
@@ -191,7 +208,12 @@ async fn stopped_server_fails_later_calls_without_reconnecting() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn automatic_reconnect_rereads_the_namespace_array() {
-    let server = start(ServerConfig::default().with_port(0)).await;
+    let server = start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0),
+    )
+    .await;
     let port = server.local_addr().port();
     let client = connect(ClientConfig::new(server.endpoint()).with_reconnect(
         ReconnectPolicy::Automatic {
@@ -211,6 +233,7 @@ async fn automatic_reconnect_rereads_the_namespace_array() {
     server.shutdown().await.expect("server shuts down");
     let restarted = start(
         ServerConfig::default()
+            .with_none_endpoint(true)
             .with_port(port)
             .with_namespace_uri("urn:banto:opcua:renamed"),
     )

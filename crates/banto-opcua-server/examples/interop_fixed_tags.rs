@@ -3,6 +3,10 @@
 //! 標準入力のコマンド: `update` は固定タグを更新し、`reflect` は最後に受けた
 //! 書き込みを機器から戻った値として `update_tag_reading` で反映する。
 //! 書き込みハンドラーは受けた書き込みを `WRITE` 行で標準出力へ書く。
+//!
+//! エンドポイントは `None`（Anonymous だけ）と、暗号化したもの（Anonymous と UserName）を
+//! 開く。利用者は `operator` / `secret` だけで、知らないクライアントの証明書も信頼する
+//! （試験用、ADR-0009）。
 
 use std::{
     io::{self, Write},
@@ -11,12 +15,31 @@ use std::{
 };
 
 use banto_opcua_server::{
-    OpcUaServer, ServerConfig, TagReading, WriteFuture, WriteHandler,
-    model::{MappedValue, Quality, SampleTimestamps, WritePrincipal, WriteRejection, WriteRequest},
+    AuthenticateFuture, OpcUaServer, ServerConfig, ServerHandlers, TagReading, UserAuthenticator,
+    WriteFuture, WriteHandler,
+    model::{
+        MappedValue, Quality, SampleTimestamps, UserNameLogin, UserRejection, WritePrincipal,
+        WriteRejection, WriteRequest,
+    },
 };
 
 const CONNECTION: &str = "PLC2";
 const GROUP: &str = "Cell1";
+
+/// `operator` / `secret` だけを通す。
+struct Users;
+
+impl UserAuthenticator for Users {
+    fn authenticate(&self, login: UserNameLogin) -> AuthenticateFuture {
+        Box::pin(async move {
+            match (login.user_name.as_str(), login.password.expose()) {
+                ("operator", "secret") => Ok(()),
+                ("operator", _) => Err(UserRejection::WrongPassword),
+                _ => Err(UserRejection::UnknownUser),
+            }
+        })
+    }
+}
 
 /// 受けた書き込みを記録する。`Locked` は書き込みを受け付けていないタグとして拒否する。
 struct Recorder {
@@ -31,9 +54,10 @@ impl WriteHandler for Recorder {
                 return Err(WriteRejection::OutOfService);
             }
             let value = request.value.to_string();
-            let principal = match request.principal {
-                WritePrincipal::Anonymous => "anonymous",
-                _ => "other",
+            let principal = match &request.principal {
+                WritePrincipal::Anonymous => "anonymous".to_owned(),
+                WritePrincipal::User(name) => format!("user:{name}"),
+                _ => "other".to_owned(),
             };
             let line = format!(
                 "WRITE {}.{}.{} {value} {principal} {}",
@@ -51,9 +75,14 @@ impl WriteHandler for Recorder {
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let last = Arc::new(Mutex::new(None));
-    let server = OpcUaServer::start_with_write_handler(
-        ServerConfig::default().with_port(0),
-        Arc::new(Recorder { last: last.clone() }),
+    let server = OpcUaServer::start_with_handlers(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_trust_all_client_certificates(true)
+            .with_port(0),
+        ServerHandlers::default()
+            .with_write_handler(Arc::new(Recorder { last: last.clone() }))
+            .with_user_authenticator(Arc::new(Users)),
     )
     .await?;
     for (tag, value) in [

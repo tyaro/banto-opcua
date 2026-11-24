@@ -6,7 +6,7 @@ use banto_opcua_server::{OpcUaServer, ServerConfig};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let server = OpcUaServer::start(ServerConfig::default()).await?;
+    let server = OpcUaServer::start(ServerConfig::default().with_none_endpoint(true)).await?;
     println!("接続先: {}", server.endpoint());
     println!(
         "固定タグの名前空間インデックス: {}",

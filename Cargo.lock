@@ -231,6 +231,7 @@ version = "0.2.0"
 dependencies = [
  "async-opcua",
  "banto-opcua-core",
+ "banto-opcua-pki",
  "futures-util",
  "tempfile",
  "thiserror",
@@ -242,6 +243,16 @@ name = "banto-opcua-core"
 version = "0.2.0"
 
 [[package]]
+name = "banto-opcua-pki"
+version = "0.2.0"
+dependencies = [
+ "async-opcua",
+ "banto-opcua-core",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "banto-opcua-server"
 version = "0.2.0"
 dependencies = [
@@ -249,6 +260,7 @@ dependencies = [
  "async-trait",
  "banto-opcua-client",
  "banto-opcua-core",
+ "banto-opcua-pki",
  "tempfile",
  "thiserror",
  "tokio",

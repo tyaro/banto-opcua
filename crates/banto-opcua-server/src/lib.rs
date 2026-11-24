@@ -1,9 +1,10 @@
 //! banto 向け OPC UA サーバーの足場。
 //!
-//! 既定の待受は `127.0.0.1`、既定ポートは 4840。セキュリティは Phase 1 の
-//! 試験用として SecurityPolicy `None` / MessageSecurityMode `None` /
-//! Anonymous だけを開く。証明書・ユーザー認証は Phase 3
-//! （tyaro/banto-industrial#201）。
+//! 既定の待受は `127.0.0.1`、既定ポートは 4840。エンドポイントは既定で
+//! Basic256Sha256・Aes128_Sha256_RsaOaep・Aes256_Sha256_RsaPss の Sign と
+//! SignAndEncrypt で、`None` は設定で開く（ADR-0009）。クライアントの証明書は
+//! 信頼の一覧（[`banto_opcua_pki::TrustList`]）で判断し、UserName は利用者が渡す
+//! [`UserAuthenticator`] で照合する。
 //!
 //! 未指定アドレス（`0.0.0.0` / `::`）で待受するときは `advertised_host` が
 //! 必須。ループバック以外への公開は明示したときだけで、警告ログを出す。
@@ -18,28 +19,35 @@
 mod config;
 mod error;
 mod fixed_tags;
+mod handlers;
 mod metadata;
 mod reading;
+mod security;
 mod server;
 mod tag_manager;
 mod write;
 
 pub use config::ServerConfig;
 pub use error::Error;
+pub use handlers::ServerHandlers;
 pub use reading::TagReading;
+pub use security::{AuthenticateFuture, SecurityEvent, SecurityEventKind, UserAuthenticator};
 pub use server::{OpcUaServer, RunningServer};
+
+/// 証明書の信頼の一覧（ADR-0009）。クライアントのクレートと同じ型。
+pub use banto_opcua_pki::{TrustList, TrustState, TrustedCertificate};
 pub use write::{WriteFuture, WriteHandler};
 
 /// タグノードの語彙。プロトコル実装の型ではなく core の型を公開する。
 pub mod model {
     #[doc(inline)]
     pub use banto_opcua_core::{
-        AccessLevel, DataType, EngineeringUnits, EuRange, Identifier, MAX_STRING_BYTES,
-        MappedReading, MappedValue, MetadataError, MetadataShape, NodeClass, NodeId, Quality,
-        SampleTimestamps, StatusCode, TagMetadata, TagType, TwoStateLabels,
-        UNECE_UNITS_NAMESPACE_URI, ValueScaling, VariableNode, VariableType, WriteClient,
-        WritePrincipal, WriteRejection, WriteRequest, publish_data_type,
-        status_code_for_write_rejection,
+        AccessLevel, CertificateInfo, DataType, EngineeringUnits, EuRange, Identifier,
+        MAX_STRING_BYTES, MappedReading, MappedValue, MessageSecurityMode, MetadataError,
+        MetadataShape, NodeClass, NodeId, Password, Quality, SampleTimestamps, SecurityPolicy,
+        StatusCode, TagMetadata, TagType, TwoStateLabels, UNECE_UNITS_NAMESPACE_URI, UserNameLogin,
+        UserRejection, ValueScaling, VariableNode, VariableType, WriteClient, WritePrincipal,
+        WriteRejection, WriteRequest, publish_data_type, status_code_for_write_rejection,
     };
 }
 

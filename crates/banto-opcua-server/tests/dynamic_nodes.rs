@@ -19,9 +19,13 @@ use tokio::sync::mpsc;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn deleted_node_notifies_and_reappearing_node_resumes_the_same_subscription() {
-    let server = OpcUaServer::start(ServerConfig::default().with_port(0))
-        .await
-        .expect("サーバーを起動する");
+    let server = OpcUaServer::start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0),
+    )
+    .await
+    .expect("サーバーを起動する");
     server
         .add_tag("Banto", "Cell1", "Speed", MappedValue::Double(10.0))
         .expect("ルートと同名の接続も独立したフォルダーで登録する");

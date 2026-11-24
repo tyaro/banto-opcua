@@ -1,9 +1,37 @@
-//! 接続の設定（ADR-0005）。SecurityPolicy と認証の項目は Phase 3 まで置かない。
+//! 接続の設定（ADR-0005）と、通信の保護・利用者の認証（ADR-0009）。
 
 use std::{
     num::{NonZeroU64, NonZeroUsize},
+    path::PathBuf,
     time::Duration,
 };
+
+use banto_opcua_core::{MessageSecurityMode, Password, SecurityPolicy, UserTokenType};
+
+/// セッションを開く利用者。
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ClientIdentity {
+    /// Anonymous。既定。
+    Anonymous,
+    /// 利用者名とパスワード。SecurityPolicy `None` では使えない（平文になる）。
+    UserName {
+        /// 利用者名。
+        user_name: String,
+        /// パスワード。
+        password: Password,
+    },
+}
+
+impl ClientIdentity {
+    /// エンドポイントに求めるトークンの種類。
+    pub fn token_type(&self) -> UserTokenType {
+        match self {
+            Self::Anonymous => UserTokenType::Anonymous,
+            Self::UserName { .. } => UserTokenType::UserName,
+        }
+    }
+}
 
 /// 接続が切れたときに、誰が張り直すか。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +172,31 @@ pub struct ClientConfig {
     pub reconnect: ReconnectPolicy,
     /// 購読モード（[`crate::ConnectedClient::monitor`]）の設定。
     pub subscription: SubscriptionSettings,
+    /// SecurityPolicy。既定は `None`。[`Self::security_mode`] と一緒に
+    /// [`Self::with_security`] で変える。
+    pub security_policy: SecurityPolicy,
+    /// MessageSecurityMode。既定は `None`。
+    pub security_mode: MessageSecurityMode,
+    /// セッションを開く利用者。既定は Anonymous。
+    pub identity: ClientIdentity,
+    /// 自分の鍵と証明書、サーバーの証明書の信頼の一覧を置くディレクトリ（ADR-0009）。
+    ///
+    /// SecurityPolicy が `None` でなければ要る（[`Self::trust_all_server_certificates`] の
+    /// 試験のほか）。鍵と証明書は初回に作り、ApplicationUri が変わったか有効期間の外なら
+    /// 作り直す（サーバーの管理者は信頼し直す）。初めて会うサーバーの証明書は拒否の一覧に
+    /// 置かれ、接続は [`crate::Error::ServerCertificateUntrusted`] になる。利用する側が
+    /// 拇印を確かめて [`crate::TrustList::trust`] で信頼に移すと、次の接続から通る。
+    /// 未設定なら一時ディレクトリを使い、切断で消す。
+    pub pki_dir: Option<PathBuf>,
+    /// ApplicationName。自分の証明書の CN にもなる。既定は `banto-opcua-client`。
+    pub application_name: String,
+    /// ApplicationUri。自分の証明書の SubjectAltName の URI にもなる。既定は
+    /// `urn:banto:opcua:client`。サーバーの管理者が見分けられるよう、機械ごとに変える。
+    pub application_uri: String,
+    /// 知らないサーバーの証明書も信頼の一覧へ入れて接続する。試験用で、既定は入れない。
+    ///
+    /// 有効期間・ホスト名・ApplicationUri の検査は続ける。
+    pub trust_all_server_certificates: bool,
 }
 
 const DEFAULT_MAX_NODES_PER_READ: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -163,7 +216,66 @@ impl ClientConfig {
             default_max_nodes_per_write: DEFAULT_MAX_NODES_PER_WRITE,
             reconnect: ReconnectPolicy::Disabled,
             subscription: SubscriptionSettings::default(),
+            security_policy: SecurityPolicy::None,
+            security_mode: MessageSecurityMode::None,
+            identity: ClientIdentity::Anonymous,
+            pki_dir: None,
+            application_name: "banto-opcua-client".to_owned(),
+            application_uri: "urn:banto:opcua:client".to_owned(),
+            trust_all_server_certificates: false,
         }
+    }
+
+    /// SecurityPolicy と MessageSecurityMode を設定する。`None` はどちらも `None` で組む。
+    pub fn with_security(
+        mut self,
+        security_policy: SecurityPolicy,
+        security_mode: MessageSecurityMode,
+    ) -> Self {
+        self.security_policy = security_policy;
+        self.security_mode = security_mode;
+        self
+    }
+
+    /// 利用者名とパスワードでセッションを開く。
+    pub fn with_user_name(
+        self,
+        user_name: impl Into<String>,
+        password: impl Into<Password>,
+    ) -> Self {
+        self.with_identity(ClientIdentity::UserName {
+            user_name: user_name.into(),
+            password: password.into(),
+        })
+    }
+
+    /// セッションを開く利用者を設定する。
+    pub fn with_identity(mut self, identity: ClientIdentity) -> Self {
+        self.identity = identity;
+        self
+    }
+
+    /// 鍵と証明書、信頼の一覧を置くディレクトリを設定する。
+    pub fn with_pki_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.pki_dir = Some(dir.into());
+        self
+    }
+
+    /// ApplicationName と ApplicationUri を設定する。
+    pub fn with_application(
+        mut self,
+        application_name: impl Into<String>,
+        application_uri: impl Into<String>,
+    ) -> Self {
+        self.application_name = application_name.into();
+        self.application_uri = application_uri.into();
+        self
+    }
+
+    /// 知らないサーバーの証明書も信頼するか選ぶ（試験用）。
+    pub fn with_trust_all_server_certificates(mut self, enabled: bool) -> Self {
+        self.trust_all_server_certificates = enabled;
+        self
     }
 
     /// セッションの確立を待つ時間を設定する。
@@ -215,7 +327,27 @@ impl ClientConfig {
     }
 
     /// 0 の時間を拒否する。async-opcua では 0 が「待たない」や「送らない」になる。
+    /// 通信の保護と利用者の組み合わせも確かめる（ADR-0009）。
     pub(crate) fn validate(&self) -> Result<(), String> {
+        let secure = self.security_policy != SecurityPolicy::None;
+        if secure != (self.security_mode != MessageSecurityMode::None) {
+            return Err(
+                "SecurityPolicy と MessageSecurityMode は、どちらも None か、どちらも None 以外にしてください"
+                    .to_owned(),
+            );
+        }
+        if !secure && self.identity.token_type() == UserTokenType::UserName {
+            return Err(
+                "SecurityPolicy None では UserName を使えません（パスワードが平文になります）"
+                    .to_owned(),
+            );
+        }
+        if secure && self.pki_dir.is_none() && !self.trust_all_server_certificates {
+            return Err(
+                "暗号化した接続には、サーバーの証明書の信頼の一覧を残す pki_dir が要ります"
+                    .to_owned(),
+            );
+        }
         let mut durations = vec![
             ("connect_timeout", self.connect_timeout),
             ("request_timeout", self.request_timeout),
@@ -304,6 +436,37 @@ mod tests {
                 .validate(),
             Ok(())
         );
+    }
+
+    #[test]
+    fn security_combinations_are_checked() {
+        let config = ClientConfig::new("opc.tcp://127.0.0.1:4840/");
+        let secure = |config: ClientConfig| {
+            config.with_security(
+                SecurityPolicy::Basic256Sha256,
+                MessageSecurityMode::SignAndEncrypt,
+            )
+        };
+        assert_eq!(
+            secure(config.clone())
+                .with_pki_dir("pki")
+                .with_user_name("operator", "secret")
+                .validate(),
+            Ok(())
+        );
+        for invalid in [
+            config
+                .clone()
+                .with_security(SecurityPolicy::Basic256Sha256, MessageSecurityMode::None),
+            config
+                .clone()
+                .with_security(SecurityPolicy::None, MessageSecurityMode::Sign),
+            config.clone().with_user_name("operator", "secret"),
+            secure(config.clone()),
+        ] {
+            assert!(invalid.validate().is_err(), "{invalid:?}");
+        }
+        assert!(!format!("{:?}", config.with_user_name("u", "secret")).contains("secret"));
     }
 
     #[test]

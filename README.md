@@ -25,10 +25,12 @@ crates/
   banto-opcua-core/    共有語彙（値、StatusCode、時刻、ノード、書き込みの要求と拒否の理由）。プロトコル非依存
   banto-opcua-server/  サーバー。既定 bind は 127.0.0.1。Write は利用者のハンドラーに通す（ADR-0004）
   banto-opcua-client/  クライアント。Hub のドライバ向けの Read / Write の部品（ADR-0005、#33 で実装）
+  banto-opcua-pki/     自分の鍵と証明書の置き場と、相手の証明書の信頼の一覧。サーバーとクライアントが共有する（ADR-0009）
 ```
 
 `banto-opcua-core` は async-opcua に依存しない。サーバーとクライアントが
-境界で core の型と async-opcua の型を変換する。
+境界で core の型と async-opcua の型を変換する。`banto-opcua-pki` は async-opcua の
+暗号の部分だけを使い、公開 API には core の型を出す。
 
 Phase 1 の固定タグを既定で公開する。`Objects/Banto/PLC1/Line1` の `Speed` と
 `Running` を Browse / Read / Subscribe できる。`ServerConfig::with_sample_tags(false)`
@@ -48,9 +50,20 @@ EURange・TrueState・FalseState）で公開する。型定義は AnalogItemType
 （[ADR-0008](docs/adr/0008-tag-metadata-properties.md)）。
 `ServerConfig::with_pki_dir` を指定すると、自己署名の鍵と証明書を初回だけ作り、
 以降の起動で再利用する。未指定なら起動ごとに一時ディレクトリへ作る
-（[ADR-0003](docs/adr/0003-persistent-pki-dir.md)）。
+（[ADR-0003](docs/adr/0003-persistent-pki-dir.md)）。ApplicationUri や公開ホストが
+証明書と合わなくなったときと、有効期間（5 年）の外では作り直す。
+
+エンドポイントは既定で Basic256Sha256・Aes128_Sha256_RsaOaep・Aes256_Sha256_RsaPss の
+Sign と SignAndEncrypt の 6 つを開き、SecurityPolicy `None` は
+`ServerConfig::with_none_endpoint(true)` のときだけ開く（そこでは Anonymous だけ）。
+Anonymous は `with_anonymous` で許す・許さないを選ぶ。UserName は
+`OpcUaServer::start_with_handlers` に渡す `UserAuthenticator` で照合し、
+banto-opcua は資格情報を持たない。クライアントの証明書は `pki_dir` の信頼の一覧で
+判断し、初めて来た証明書は拒否の一覧に置かれる。管理者は `RunningServer::trust_list()` で
+一覧を見て信頼に移す。受け付けた・断ったセッションと理由は
+`RunningServer::security_events()`。設計は [ADR-0009](docs/adr/0009-phase3-security.md)。
 書き込みは `OpcUaServer::start_with_write_handler` で渡す `WriteHandler` を通してだけ
-受け付ける。`OpcUaServer::start` で起動したサーバーは読み取り専用のまま。
+受け付ける（`start_with_handlers` でも渡せる）。`OpcUaServer::start` で起動したサーバーは読み取り専用のまま。
 タグは書き込み不可で登録され、`RunningServer::set_tag_writable` で書き込み可にした
 タグだけ AccessLevel に CurrentWrite が付く。サーバーは型・StatusCode・IndexRange・
 同時実行数を先に検査し、通ったノードだけを `WriteRequest`（外部名、値、主体、
@@ -58,8 +71,9 @@ EURange・TrueState・FalseState）で公開する。型定義は AnalogItemType
 表どおりの StatusCode になる。Write ではノードの値を書き換えず、機器から戻った値は
 `update_tag_reading` で反映する。1 回の Write のノード数（既定 10）と同時に走る
 ハンドラーの数（既定 8）は `ServerConfig::with_max_nodes_per_write` /
-`with_max_concurrent_writes` で変えられる。ハンドラーを渡してループバック以外へ
-公開すると、Anonymous で書けるため警告ログを出す。Hub 側の結合は
+`with_max_concurrent_writes` で変えられる。UserName のセッションの書き込みは、主体が
+`WritePrincipal::User(利用者名)` になる。ハンドラーを渡し、Anonymous を許したまま
+ループバック以外へ公開すると、警告ログを出す。Hub 側の結合は
 [banto-industrial #653](https://github.com/tyaro/banto-industrial/issues/653)。
 
 ハブ（banto-industrial）は [#627](https://github.com/tyaro/banto-industrial/pull/627) で
@@ -75,27 +89,27 @@ Issue 間の依存関係と実装順は [実装計画](docs/implementation-plan.
 | 足場 | クレート分割、基盤の ADR、ループバックのプロセス内疎通 | 本リポジトリ |
 | Phase 1 | サーバー起動、固定の名前空間、少数の変数、UaExpert から Browse / Read / Subscribe | 本リポジトリ、その後ハブへ接続 |
 | Phase 2 | タグレジストリ、アドレス空間、型・品質・時刻の写像、設定、管理 UI、Windows サービス | 主に banto-hub。写像の純関数は core |
-| Phase 3 | 証明書、SecurityPolicy、認証、トラスト、相互接続、ソーク | 本リポジトリとハブ |
+| Phase 3 | 証明書、SecurityPolicy、認証、トラスト、相互接続、ソーク。署名・暗号化、UserName、信頼の一覧、asyncua との相互接続は [#54](https://github.com/tyaro/banto-opcua/issues/54)（[ADR-0009](docs/adr/0009-phase3-security.md)）で実装。ソークと CTT は後続 | 本リポジトリとハブ |
 | Write | 利用者の書き込みハンドラーに通す Write（[ADR-0004](docs/adr/0004-write-through-host-handler.md)）。Hub 側は banto-industrial #653 | 本リポジトリとハブ |
-| クライアント | Hub のドライバ向けの Read / Write の部品（[ADR-0005](docs/adr/0005-client-as-hub-driver.md)、[#33](https://github.com/tyaro/banto-opcua/issues/33)）と、購読で最新値を持つ購読モード（[ADR-0006](docs/adr/0006-client-subscription-latest-values.md)）、ノードの説明・単位・レンジを読む `read_metadata`（[ADR-0008](docs/adr/0008-tag-metadata-properties.md)）。ドライバ本体は banto-industrial #678 | 本リポジトリとハブ |
+| クライアント | Hub のドライバ向けの Read / Write の部品（[ADR-0005](docs/adr/0005-client-as-hub-driver.md)、[#33](https://github.com/tyaro/banto-opcua/issues/33)）、署名・暗号化と UserName、サーバーの証明書の信頼の一覧、エンドポイントの一覧（[ADR-0009](docs/adr/0009-phase3-security.md)）と、購読で最新値を持つ購読モード（[ADR-0006](docs/adr/0006-client-subscription-latest-values.md)）、ノードの説明・単位・レンジを読む `read_metadata`（[ADR-0008](docs/adr/0008-tag-metadata-properties.md)）。ドライバ本体は banto-industrial #678 | 本リポジトリとハブ |
 | 別 issue | Method、Event、Historical Access、クライアントの Browse | 未起票または別 issue |
 
 #201 の初期スコープ外はクライアント製品、Method、Event / Alarm、
 Historical Access、コンパニオン仕様、Discovery Server、細かい権限である。
 
-Phase 1 の試験用セキュリティは `None` / `None` / Anonymous。既定 bind は
-ループバック、既定ポートは 4840。ループバック以外は明示設定のときだけ、
-警告ログ付きで許可する（「決定事項」）。証明書管理 UI は Phase 3 まで前倒ししない。
+既定 bind はループバック、既定ポートは 4840。ループバック以外は明示設定のときだけ、
+警告ログ付きで許可する（「決定事項」）。セキュリティの既定は上の ADR-0009 のとおりで、
+証明書の管理の画面はハブの側に置く。
 
 ## テストの層
 
 | 層 | いつ | 何を見るか |
 | --- | --- | --- |
 | 単体 | PR の CI（Linux と Windows） | core の写像と NodeId の解析。クライアントの要求の分割、Write の結末の分類、購読の最新値の表。サーバーを起動しない |
-| プロセス内 | 同上 | ループバックで `ServerStatus/State` を読む。固定タグは Browse / Read / DataChange 通知と、サンプルタグが読み取り専用の AccessLevel であることを確認する。Write は拒否の StatusCode、遅いハンドラーの間も Read と購読が止まらないこと、ノード数と同時実行数の上限、CloseSession の後や TCP だけが切れたときに残りのノードを書かないことを確認する（`tests/write.rs`）。IPv6 が使える環境では `[::1]` でも標準ノードの疎通を見る。クライアントの部品は、まとめて Read / Write、購読モード、上限による分割、切断と自動再接続を本サーバー相手に確かめる（`tests/client_batch.rs`・`client_write.rs`・`client_subscribe.rs`）。タグの説明・単位・レンジは、型定義・プロパティ・更新の通知・クライアントでの読み戻しを確かめる（`tests/tag_metadata.rs`） |
+| プロセス内 | 同上 | ループバックで `ServerStatus/State` を読む。固定タグは Browse / Read / DataChange 通知と、サンプルタグが読み取り専用の AccessLevel であることを確認する。Write は拒否の StatusCode、遅いハンドラーの間も Read と購読が止まらないこと、ノード数と同時実行数の上限、CloseSession の後や TCP だけが切れたときに残りのノードを書かないことを確認する（`tests/write.rs`）。IPv6 が使える環境では `[::1]` でも標準ノードの疎通を見る。クライアントの部品は、まとめて Read / Write、購読モード、上限による分割、切断と自動再接続を本サーバー相手に確かめる（`tests/client_batch.rs`・`client_write.rs`・`client_subscribe.rs`）。タグの説明・単位・レンジは、型定義・プロパティ・更新の通知・クライアントでの読み戻しを確かめる（`tests/tag_metadata.rs`）。セキュリティは、既定のエンドポイントの一覧、両側の証明書が保留から信頼に移ると通ること、UserName の照合と断った理由の記録、6 つの SecurityPolicy と MessageSecurityMode の組での接続と書き込みの主体を確かめる（`tests/security.rs`） |
 | 接続失敗 | 接続処理を変更する PR・毎日・手動（Linux と Windows） | Discovery だけを通すプロキシでセッションを止め、時間切れとキャンセルで TCP 接続が閉じることを確認する。PR の必須 `ci-gate` には含めない |
-| 相互接続 | 別ワークフロー（`workflow_dispatch`、毎日、main への push、PR はパスで絞る） | Python asyncua → 本サーバーの GetEndpoints / Browse / Read / Subscription / Write と、本クライアント → opc-plc のまとめて Read / Write と購読モード。固定バージョンと実行方法は [`interop/README.md`](interop/README.md) |
-| 手動 | 開発者の手元 | 下記のサンプルサーバーを起動し、UaExpert から Browse / Read / Subscribe。Write は [書き込みの手動確認](#書き込みの手動確認uaexpert) の手順 |
+| 相互接続 | 別ワークフロー（`workflow_dispatch`、毎日、main への push、PR はパスで絞る） | Python asyncua → 本サーバーの GetEndpoints / Browse / Read / Subscription / Write、暗号化したエンドポイントでの UserName の照合と書き込みと、本クライアント → opc-plc のまとめて Read / Write と購読モード。固定バージョンと実行方法は [`interop/README.md`](interop/README.md) |
+| 手動 | 開発者の手元 | 下記のサンプルサーバーを起動し、UaExpert から Browse / Read / Subscribe。Write は [書き込みの手動確認](#書き込みの手動確認uaexpert)、暗号化は [暗号化と UserName の手動確認](#暗号化と-username-の手動確認uaexpert) の手順 |
 | 後続 | 認証試験が要るとき | OPC Foundation Compliance Test Tool（CTT） |
 
 プロセス内テストは外部プロセスもコンテナも要らない。相互接続は PR の
@@ -124,7 +138,7 @@ Phase 1 の試験用セキュリティは `None` / `None` / Anonymous。既定 b
 
 UaExpert で手動確認するときは `cargo run -p banto-opcua-server --example fixed_tags`
 を実行し、表示されたエンドポイントへ SecurityPolicy `None`、Anonymous で
-接続する。`Objects/Banto/PLC1/Line1` を開き、2 つの変数を Data Access View
+接続する（このサンプルは `None` のエンドポイントも開く）。`Objects/Banto/PLC1/Line1` を開き、2 つの変数を Data Access View
 へ追加する。サンプルサーバーの端末で Enter を押すたびに値が変わり、
 MonitoredItem に DataChange が届く。`q` で停止する。
 
@@ -155,6 +169,20 @@ MonitoredItem に DataChange が届く。`q` で停止する。
    `tests/write.rs` と相互接続テストでも確かめている）。
 5. 空行か `quit` で停止する。
 
+## 暗号化と UserName の手動確認（UaExpert）
+
+上の `interop_fixed_tags` は、`None` のほかに暗号化した 6 つのエンドポイントを開き、
+知らないクライアントの証明書も信頼する（試験用）。利用者は `operator` / `secret` だけ。
+
+1. UaExpert で SecurityPolicy `Basic256Sha256`（または Aes128_Sha256_RsaOaep・
+   Aes256_Sha256_RsaPss）、Mode `Sign & Encrypt` のエンドポイントを選び、
+   Authentication に UserName `operator` / Password `secret` を入れる。
+2. 初回はサーバーの証明書を信頼するか尋ねられるので、信頼する。
+3. 接続できたら `Setpoint` に書き、端末の `WRITE` 行の主体が `user:operator` になることを見る。
+4. Password を違う値にすると `BadUserAccessDenied` で断られる。
+
+信頼の一覧で判断する本来の動きは、`trust_all` を使わない `tests/security.rs` で確かめている。
+
 ## 開発
 
 ツールチェインは `rust-toolchain.toml` の 1.98.1（banto-industrial と同じピン）。
@@ -184,7 +212,7 @@ banto の ADR-0011 に合わせ、git タグで配布する（最初のタグは
 3. **品質と値。** Bad の細分化は後回しにする。有効な値では Good は Good、Stale は `UncertainLastUsableValue`（0x40900000）として最後の値を保持する。Bad 品質や欠損値は値なし・汎用 `Bad`（0x80000000）。Double の NaN / ±Inf、Boolean に写す bit の 0 / 1 以外も値なし・汎用 `Bad` とし、丸めない（ADR-0007 で、整数の型の範囲外・小数、非有限の Float、上限を超える String にも広げた）。Stale でも値が無効なら Bad を優先する。bit の `-0.0` は `0.0` と同じ false として扱う。core の `map_current_value` と `map_typed_value` がこの契約を実装する。ハブの共通読み取りも [banto-industrial #615](https://github.com/tyaro/banto-industrial/issues/615) で同じ契約（値なし・Bad）に揃えた。
 4. **時刻。** Good の SourceTimestamp は採取時刻、Bad と Stale は品質を認識した時刻（または実際に復旧を試みた時刻）、不明なときは null。別の時刻や Read 時の現在時刻では補わない。core の `SampleTimestamps::for_quality` に写像を実装した。引数の品質はハブの入力品質であり、Good の無効値が Bad に写った場合は採取時刻を異常の観測時刻とみなす。固定タグの既存経路では、反復 Read でも保存済み SourceTimestamp が変わらないことを確認した。ハブの共通読み取りは [banto-industrial #614](https://github.com/tyaro/banto-industrial/issues/614) で採取時刻と品質の認識時刻を返し、[#627](https://github.com/tyaro/banto-industrial/pull/627) で実データに接続した（実装済み）。
 5. **ポート。** 既定は 4840。設定で変更できる。
-6. **LAN 公開。** 条件付きで許可する。`advertised_host` を用意し、未指定アドレス（`0.0.0.0` / `::`）でそれが未設定なら起動はエラーになる。ループバック以外は明示したときだけ公開し、そのときは警告ログを出す。既定の bind は `127.0.0.1`。
+6. **LAN 公開。** 条件付きで許可する。`advertised_host` を用意し、未指定アドレス（`0.0.0.0` / `::`）でそれが未設定なら起動はエラーになる。ループバック以外は明示したときだけ公開し、そのときは警告ログを出す。既定の bind は `127.0.0.1`。2026-11-24 に [ADR-0009](docs/adr/0009-phase3-security.md) で、エンドポイントの既定を暗号化したものだけにした。
 7. **edition。** 2024 のまま。
 
 クライアントは [ADR-0005](docs/adr/0005-client-as-hub-driver.md) で Hub のドライバ向けの部品として作る（[#33](https://github.com/tyaro/banto-opcua/issues/33)）。

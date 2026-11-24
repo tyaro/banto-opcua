@@ -2,7 +2,7 @@
 //!
 //! このクレートはプロトコルを話さない。値の型、品質から StatusCode への写像、
 //! 時刻から OPC UA DateTime への変換、ノードの形、書き込みハンドラーとの
-//! 受け渡しの型、クライアントが扱う NodeId の文字列表現と値の型だけを持つ。サーバー（`banto-opcua-server`）とクライアント
+//! 受け渡しの型、通信の保護と利用者の認証の語彙、クライアントが扱う NodeId の文字列表現と値の型だけを持つ。サーバー（`banto-opcua-server`）とクライアント
 //! （`banto-opcua-client`）が async-opcua との境界でこれらの型を使う。依存をここに置かないのは、写像を
 //! 単体テストできるようにすることと、MPL-2.0 の型を MIT の公開 API に
 //! 漏らさないため（ADR-0001）。
@@ -16,6 +16,7 @@ mod metadata;
 mod node;
 mod quality;
 mod scalar;
+mod security;
 mod time;
 mod value;
 mod write;
@@ -28,6 +29,10 @@ pub use metadata::{
 pub use node::{AccessLevel, Identifier, NodeClass, NodeId, VariableNode};
 pub use quality::{Quality, StatusCode, status_code_for_quality};
 pub use scalar::{NotPublishable, ScalarType, ScalarValue};
+pub use security::{
+    CertificateInfo, MessageSecurityMode, Password, SecurityPolicy, UserNameLogin, UserRejection,
+    UserTokenType,
+};
 pub use time::{
     SampleTimestamps, UNIX_EPOCH_TICKS, opcua_ticks_from_system_time, system_time_from_opcua_ticks,
 };

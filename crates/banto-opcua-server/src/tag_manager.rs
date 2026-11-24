@@ -26,7 +26,7 @@ use banto_opcua_core::{
     MappedValue, WriteClient, WritePrincipal, WriteRequest, status_code_for_write_rejection,
 };
 
-use crate::{WriteHandler, reading};
+use crate::{WriteHandler, reading, security};
 
 pub(crate) type TagNodeManager = InMemoryNodeManager<TagNodeManagerImpl>;
 
@@ -142,7 +142,7 @@ impl InMemoryNodeManagerImpl for TagNodeManagerImpl {
                     name.group,
                     name.tag,
                     value,
-                    WritePrincipal::Anonymous,
+                    principal_of(context),
                     client.clone(),
                 ),
                 Err(status) => {
@@ -171,6 +171,13 @@ impl InMemoryNodeManagerImpl for TagNodeManagerImpl {
             });
         }
         Ok(())
+    }
+}
+
+fn principal_of(context: &RequestContext) -> WritePrincipal {
+    match security::user_name_of(&context.token) {
+        Some(user_name) => WritePrincipal::User(user_name.to_owned()),
+        None => WritePrincipal::Anonymous,
     }
 }
 
@@ -205,8 +212,8 @@ fn check_write(
     {
         return Err(StatusCode::BadNotWritable);
     }
-    // 開いているのは Anonymous のエンドポイントだけ。ほかの主体は Phase 3 で足す。
-    if !context.token.is_anonymous()
+    // 主体は Anonymous か、照合を通した UserName だけ（ADR-0009）。
+    if (!context.token.is_anonymous() && security::user_name_of(&context.token).is_none())
         || !user_access_level(context, found).contains(AccessLevel::CURRENT_WRITE)
     {
         return Err(StatusCode::BadUserAccessDenied);

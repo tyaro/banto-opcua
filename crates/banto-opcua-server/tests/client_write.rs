@@ -82,7 +82,9 @@ fn drain(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn write_batch_returns_each_node_in_request_order() {
     let (server, mut received) = start(
-        ServerConfig::default().with_port(0),
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0),
         &[
             ("Setpoint", MappedValue::Double(0.0)),
             ("Enable", MappedValue::Boolean(false)),
@@ -154,6 +156,7 @@ async fn write_is_split_by_the_advertised_max_nodes_per_write() {
         .collect();
     let (server, mut received) = start(
         ServerConfig::default()
+            .with_none_endpoint(true)
             .with_port(0)
             .with_max_nodes_per_write(NonZeroUsize::new(2).unwrap()),
         &writable,
@@ -179,7 +182,13 @@ async fn write_is_split_by_the_advertised_max_nodes_per_write() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn write_after_the_connection_is_lost_reports_every_node_as_not_sent() {
     let writable = [("Setpoint", MappedValue::Double(0.0))];
-    let (server, _received) = start(ServerConfig::default().with_port(0), &writable).await;
+    let (server, _received) = start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0),
+        &writable,
+    )
+    .await;
     let port = server.local_addr().port();
     let client = connect(&server).await;
     let writes = [
@@ -199,7 +208,13 @@ async fn write_after_the_connection_is_lost_reports_every_node_as_not_sent() {
     assert_eq!(failure.outcomes.len(), writes.len());
 
     // 同じポートでサーバーが戻っても張り直さず、どのノードも送らない。
-    let (restarted, mut received) = start(ServerConfig::default().with_port(port), &writable).await;
+    let (restarted, mut received) = start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(port),
+        &writable,
+    )
+    .await;
     tokio::time::sleep(Duration::from_secs(3)).await;
     let failure = client.write_batch(&writes).await.expect_err("張り直さない");
     assert!(matches!(failure.error, ClientError::Disconnected));
@@ -213,7 +228,13 @@ async fn write_after_the_connection_is_lost_reports_every_node_as_not_sent() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn automatic_reconnect_writes_with_the_new_session_and_namespace_array() {
     let writable = [("Setpoint", MappedValue::Double(0.0))];
-    let (server, _received) = start(ServerConfig::default().with_port(0), &writable).await;
+    let (server, _received) = start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0),
+        &writable,
+    )
+    .await;
     let port = server.local_addr().port();
     let client = OpcUaClient::connect_with(ClientConfig::new(server.endpoint()).with_reconnect(
         ReconnectPolicy::Automatic {
@@ -243,6 +264,7 @@ async fn automatic_reconnect_writes_with_the_new_session_and_namespace_array() {
     server.shutdown().await.expect("server shuts down");
     let (restarted, mut received) = start(
         ServerConfig::default()
+            .with_none_endpoint(true)
             .with_port(port)
             .with_namespace_uri("urn:banto:opcua:renamed"),
         &writable,

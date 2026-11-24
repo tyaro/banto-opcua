@@ -267,7 +267,7 @@ fn reading(number: f64) -> TagReading {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handler_results_map_to_status_codes() {
-    let mut harness = Harness::start(ServerConfig::default()).await;
+    let mut harness = Harness::start(ServerConfig::default().with_none_endpoint(true)).await;
     let (session, _pki) = connect(&harness.server).await;
 
     let ok = harness.writable("Ok");
@@ -334,7 +334,7 @@ async fn handler_results_map_to_status_codes() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_server_rejects_before_calling_the_handler() {
-    let mut harness = Harness::start(ServerConfig::default()).await;
+    let mut harness = Harness::start(ServerConfig::default().with_none_endpoint(true)).await;
     let (session, _pki) = connect(&harness.server).await;
     let speed = harness.writable("Speed");
 
@@ -423,7 +423,7 @@ async fn the_server_rejects_before_calling_the_handler() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tags_that_are_not_writable_stay_current_read() {
-    let mut harness = Harness::start(ServerConfig::default()).await;
+    let mut harness = Harness::start(ServerConfig::default().with_none_endpoint(true)).await;
     let (session, _pki) = connect(&harness.server).await;
     harness
         .server
@@ -506,9 +506,13 @@ async fn tags_that_are_not_writable_stay_current_read() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn without_a_handler_every_write_is_not_writable() {
-    let server = OpcUaServer::start(ServerConfig::default().with_port(0))
-        .await
-        .expect("サーバーを起動する");
+    let server = OpcUaServer::start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0),
+    )
+    .await
+    .expect("サーバーを起動する");
     server
         .add_tag(CONNECTION, GROUP, "Speed", MappedValue::Double(1.0))
         .expect("タグを登録する");
@@ -532,7 +536,7 @@ async fn without_a_handler_every_write_is_not_writable() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_slow_handler_does_not_block_reads_or_subscriptions() {
-    let mut harness = Harness::start(ServerConfig::default()).await;
+    let mut harness = Harness::start(ServerConfig::default().with_none_endpoint(true)).await;
     let (session, _pki) = connect(&harness.server).await;
     let slow = harness.writable("Slow");
 
@@ -603,7 +607,9 @@ async fn a_slow_handler_does_not_block_reads_or_subscriptions() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_node_writes_report_each_node_and_respect_the_node_limit() {
     let mut harness = Harness::start(
-        ServerConfig::default().with_max_nodes_per_write(NonZeroUsize::new(3).expect("3")),
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_max_nodes_per_write(NonZeroUsize::new(3).expect("3")),
     )
     .await;
     let (session, _pki) = connect(&harness.server).await;
@@ -647,7 +653,7 @@ async fn multi_node_writes_report_each_node_and_respect_the_node_limit() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn closing_the_session_finishes_the_running_node_and_skips_the_rest() {
-    let mut harness = Harness::start(ServerConfig::default()).await;
+    let mut harness = Harness::start(ServerConfig::default().with_none_endpoint(true)).await;
     let (session, _pki) = connect(&harness.server).await;
     let first = harness.writable("Slow1");
     let second = harness.writable("Slow2");
@@ -674,7 +680,7 @@ async fn closing_the_session_finishes_the_running_node_and_skips_the_rest() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dropping_the_connection_finishes_the_running_node_and_skips_the_rest() {
-    let mut harness = Harness::start(ServerConfig::default()).await;
+    let mut harness = Harness::start(ServerConfig::default().with_none_endpoint(true)).await;
     let (session, _pki, event_loop) = connect_with_event_loop(&harness.server).await;
     let first = harness.writable("Slow1");
     let second = harness.writable("Slow2");
@@ -705,7 +711,9 @@ async fn dropping_the_connection_finishes_the_running_node_and_skips_the_rest() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn writes_beyond_the_concurrency_limit_are_resource_unavailable() {
     let mut harness = Harness::start(
-        ServerConfig::default().with_max_concurrent_writes(NonZeroUsize::new(1).expect("1")),
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_max_concurrent_writes(NonZeroUsize::new(1).expect("1")),
     )
     .await;
     let (session, _pki) = connect(&harness.server).await;

@@ -64,7 +64,12 @@ async fn wait_for(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn latest_follows_notifications_in_registration_order() {
-    let server = start(ServerConfig::default().with_port(0)).await;
+    let server = start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0),
+    )
+    .await;
     let first = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
     server
         .add_tag_reading("PLC2", "Cell1", "Count", reading(3.0, first))
@@ -128,7 +133,12 @@ async fn latest_follows_notifications_in_registration_order() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn items_beyond_the_subscription_limit_are_reported_per_node() {
-    let server = start(ServerConfig::default().with_port(0)).await;
+    let server = start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0),
+    )
+    .await;
     let client = connect(ClientConfig::new(server.endpoint())).await;
     // async-opcua のサーバーは 1 つの購読に 1000 ノード、1 回の要求に 1000 ノードまで。
     let nodes = vec![address("i=2259"); 1001];
@@ -158,7 +168,12 @@ async fn items_beyond_the_subscription_limit_are_reported_per_node() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn latest_fails_after_the_connection_is_lost() {
-    let server = start(ServerConfig::default().with_port(0)).await;
+    let server = start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0),
+    )
+    .await;
     let client = connect(ClientConfig::new(server.endpoint())).await;
     client.monitor(&[address("i=2259")]).await.expect("monitor");
     wait_for(&client, |readings| readings[0].status == StatusCode::GOOD).await;
@@ -181,7 +196,12 @@ async fn latest_fails_after_the_connection_is_lost() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn automatic_reconnect_recreates_the_subscription_with_the_new_namespace_array() {
-    let server = start(ServerConfig::default().with_port(0)).await;
+    let server = start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0),
+    )
+    .await;
     let port = server.local_addr().port();
     let client = connect(ClientConfig::new(server.endpoint()).with_reconnect(
         ReconnectPolicy::Automatic {
@@ -204,6 +224,7 @@ async fn automatic_reconnect_recreates_the_subscription_with_the_new_namespace_a
     server.shutdown().await.expect("server shuts down");
     let restarted = start(
         ServerConfig::default()
+            .with_none_endpoint(true)
             .with_port(port)
             .with_namespace_uri("urn:banto:opcua:renamed"),
     )

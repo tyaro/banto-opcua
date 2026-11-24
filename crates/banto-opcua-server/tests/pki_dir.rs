@@ -1,4 +1,5 @@
-//! `ServerConfig::pki_dir` を指定すると、自己署名の鍵と証明書を再起動後も使い回す。
+//! `ServerConfig::pki_dir` を指定すると、自己署名の鍵と証明書を再起動後も使い回す
+//! （ADR-0003）。設定と合わなくなったときの作り直しは banto-opcua-pki の単体テスト。
 
 use std::{fs, path::Path};
 
@@ -28,9 +29,14 @@ fn assert_private_key_is_owner_only(pki: &Path) {
 }
 
 async fn start_and_read(pki: &Path) -> (Vec<u8>, Vec<u8>) {
-    let server = OpcUaServer::start(ServerConfig::default().with_port(0).with_pki_dir(pki))
-        .await
-        .expect("pki_dir を指定して起動する");
+    let server = OpcUaServer::start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0)
+            .with_pki_dir(pki),
+    )
+    .await
+    .expect("pki_dir を指定して起動する");
     let client = OpcUaClient::connect(server.endpoint())
         .await
         .expect("鍵を読み直したサーバーへ接続する");
@@ -111,10 +117,16 @@ async fn pki_dir_fails_when_the_keypair_cannot_be_created() {
         return;
     }
 
-    let result = OpcUaServer::start(ServerConfig::default().with_port(0).with_pki_dir(&pki)).await;
+    let result = OpcUaServer::start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0)
+            .with_pki_dir(&pki),
+    )
+    .await;
     fs::set_permissions(&own, fs::Permissions::from_mode(0o755)).expect("権限を戻す");
     match result {
-        Err(Error::Pki(error)) => assert_eq!(error.kind(), std::io::ErrorKind::NotFound),
+        Err(Error::Pki(_)) => {}
         Err(other) => panic!("証明書と秘密鍵を作れなかったことを返す: {other}"),
         Ok(server) => {
             server.shutdown().await.expect("停止する");

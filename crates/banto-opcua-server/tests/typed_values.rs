@@ -66,7 +66,10 @@ async fn start() -> (
 ) {
     let (calls, received) = mpsc::unbounded_channel();
     let server = OpcUaServer::start_with_write_handler(
-        ServerConfig::default().with_port(0).with_sample_tags(false),
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0)
+            .with_sample_tags(false),
         Arc::new(Recorder(calls)),
     )
     .await
