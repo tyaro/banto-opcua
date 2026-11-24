@@ -185,7 +185,7 @@ impl TrustList {
                     continue;
                 }
                 write_verified(&target, &der_of(&cert)?)?;
-                match std::fs::remove_file(&path) {
+                match retry_shared(|| std::fs::remove_file(&path)) {
                     // 並行する移行が先に消した。移し先は上で確かめてある。
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                     other => other?,
@@ -221,7 +221,7 @@ impl TrustList {
 
     fn discard(&self, cert: &X509, state: TrustState) -> io::Result<()> {
         let path = self.dir.join(dir_name(state)).join(file_name(cert));
-        match std::fs::remove_file(path) {
+        match retry_shared(|| std::fs::remove_file(&path)) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             other => other,
         }
@@ -301,7 +301,7 @@ fn write_verified(path: &Path, der: &[u8]) -> io::Result<()> {
         file.write_all(der).and_then(|()| file.sync_all())
     };
     drop(file);
-    if let Err(error) = written.and_then(|()| std::fs::rename(&temporary, path)) {
+    if let Err(error) = written.and_then(|()| retry_shared(|| std::fs::rename(&temporary, path))) {
         let _ = std::fs::remove_file(&temporary);
         return if holds(path, der)? {
             Ok(())
@@ -319,9 +319,27 @@ fn write_verified(path: &Path, der: &[u8]) -> io::Result<()> {
     }
 }
 
+/// Windows で、ほかの操作（この一覧の並行する操作や、接続を確かめる async-opcua）が
+/// 開いている・消している途中のファイルへの読み書き・名前の変更・削除は、一時的に
+/// `PermissionDenied`（共有違反）になる。そのときだけ、短い間を置いて試し直す。
+/// Unix の `PermissionDenied` は本当の権限の問題なので、試し直さずにそのまま返す。
+fn retry_shared<T>(mut operation: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    const ATTEMPTS: u32 = if cfg!(windows) { 50 } else { 1 };
+    let mut attempt = 1;
+    loop {
+        match operation() {
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied && attempt < ATTEMPTS => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            other => return other,
+        }
+    }
+}
+
 /// `path` の中身が `der` と同じか。無ければ `false`。
 fn holds(path: &Path, der: &[u8]) -> io::Result<bool> {
-    match std::fs::read(path) {
+    match retry_shared(|| std::fs::read(path)) {
         Ok(existing) => Ok(existing == der),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
@@ -358,7 +376,7 @@ fn create_temporary(path: &Path) -> io::Result<(PathBuf, std::fs::File)> {
 
 /// 2 つのパスが同じファイルを指すか。片方が無ければ違うとする。
 fn same_file(a: &Path, b: &Path) -> io::Result<bool> {
-    let canonical = |path: &Path| match std::fs::canonicalize(path) {
+    let canonical = |path: &Path| match retry_shared(|| std::fs::canonicalize(path)) {
         Ok(path) => Ok(Some(path)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
@@ -401,7 +419,7 @@ fn list_files(dir: &Path) -> io::Result<Vec<(PathBuf, String)>> {
 
 /// 証明書のファイルを読む。読めなければ（I/O の失敗）`Err`、無いか証明書として解釈できなければ `None`。
 fn read_certificate(path: &Path) -> io::Result<Option<X509>> {
-    let bytes = match std::fs::read(path) {
+    let bytes = match retry_shared(|| std::fs::read(path)) {
         Ok(bytes) => bytes,
         // 一覧を読んでから開くまでに、並行する操作が消した。
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
