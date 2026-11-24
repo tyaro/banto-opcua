@@ -7,7 +7,8 @@
 //! 単体テストできるようにすることと、MPL-2.0 の型を MIT の公開 API に
 //! 漏らさないため（ADR-0001）。
 //!
-//! 写像の方針はリポジトリ README の「決定事項」（2026-10-15）。削除ノードの
+//! 写像の方針はリポジトリ README の「決定事項」（2026-10-15）と、公開する型を
+//! 元の型に広げた ADR-0007。削除ノードの
 //! 購読と品質だけの変化通知は server で扱う。非有限値の判定は core に置く。
 
 mod address;
@@ -21,13 +22,13 @@ mod write;
 pub use address::{NamespaceRef, NodeAddress, NodeAddressError, UnsupportedIdentifierType};
 pub use node::{AccessLevel, Identifier, NodeClass, NodeId, VariableNode};
 pub use quality::{Quality, StatusCode, status_code_for_quality};
-pub use scalar::{ScalarType, ScalarValue};
+pub use scalar::{NotPublishable, ScalarType, ScalarValue};
 pub use time::{
     SampleTimestamps, UNIX_EPOCH_TICKS, opcua_ticks_from_system_time, system_time_from_opcua_ticks,
 };
 pub use value::{
-    DataType, MappedReading, MappedValue, PublishDecision, TagType, map_current_value,
-    publish_decision,
+    DataType, MAX_STRING_BYTES, MappedReading, MappedValue, TagType, ValueScaling,
+    map_current_value, map_typed_value, publish_data_type,
 };
 pub use write::{
     WriteClient, WritePrincipal, WriteRejection, WriteRequest, status_code_for_write_rejection,

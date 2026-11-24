@@ -48,7 +48,7 @@ async fn start(
         .expect("server starts");
     for (tag, value) in writable {
         server
-            .add_tag(CONNECTION, GROUP, tag, *value)
+            .add_tag(CONNECTION, GROUP, tag, value.clone())
             .expect("add tag");
         server
             .set_tag_writable(CONNECTION, GROUP, tag, true)

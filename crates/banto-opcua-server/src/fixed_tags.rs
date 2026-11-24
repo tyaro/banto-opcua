@@ -10,8 +10,8 @@ use opcua::{
         address_space::{AccessLevel, ObjectBuilder, Variable},
     },
     types::{
-        AttributeId, ByteString, DataTypeId, DataValue, DateTime, Identifier, NodeId, ObjectId,
-        QualifiedName, ReferenceTypeId, StatusCode, TimestampsToReturn, VariableTypeId, Variant,
+        AttributeId, ByteString, DataValue, DateTime, Identifier, NodeId, ObjectId, QualifiedName,
+        ReferenceTypeId, StatusCode, TimestampsToReturn, VariableTypeId, Variant,
     },
 };
 
@@ -20,7 +20,7 @@ use banto_opcua_core::DataType;
 use opcua::server::address_space::NodeType;
 
 use crate::{
-    Error,
+    Error, reading,
     tag_manager::{self, TagName, TagNodeManager, WritePath},
 };
 
@@ -164,10 +164,7 @@ impl FixedTags {
         data_type: DataType,
         value: DataValue,
     ) -> Result<(), Error> {
-        let placeholder = match data_type {
-            DataType::Boolean => Variant::Boolean(false),
-            DataType::Double => Variant::Double(0.0),
-        };
+        let placeholder = reading::placeholder(data_type);
         self.add_tag_data_value_with(
             handle,
             connection,
@@ -270,10 +267,7 @@ impl FixedTags {
         validate_path(connection, group, tag)?;
         let id = NodeId::new(self.namespace_index, format!("{connection}.{group}.{tag}"));
         let group_id = folder_id(self.namespace_index, &[connection, group]);
-        let expected: NodeId = match data_type {
-            DataType::Boolean => DataTypeId::Boolean.into(),
-            DataType::Double => DataTypeId::Double.into(),
-        };
+        let expected: NodeId = reading::data_type_id(data_type).into();
         let mut space = self.manager.address_space().write();
         if !space.has_reference(&group_id, &id, ReferenceTypeId::HasComponent) {
             return Err(Error::TagUpdate(format!(

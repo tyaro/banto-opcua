@@ -53,7 +53,8 @@ impl WriteClient {
 
 /// サーバーの検査を通った 1 ノードぶんの書き込み。
 ///
-/// 値の型はノードの DataType と一致し、Double は有限値に限る。書き込みの
+/// 値の型はノードの DataType と一致し、Float / Double は有限値、String は
+/// [`crate::MAX_STRING_BYTES`] 以下に限る（ADR-0007）。書き込みの
 /// SourceTimestamp と ServerTimestamp は捨ててあり、ここには含まない。
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]

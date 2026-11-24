@@ -33,9 +33,10 @@ pub use write::{WriteFuture, WriteHandler};
 pub mod model {
     #[doc(inline)]
     pub use banto_opcua_core::{
-        AccessLevel, DataType, Identifier, MappedReading, MappedValue, NodeClass, NodeId,
-        PublishDecision, Quality, SampleTimestamps, StatusCode, TagType, VariableNode, WriteClient,
-        WritePrincipal, WriteRejection, WriteRequest, status_code_for_write_rejection,
+        AccessLevel, DataType, Identifier, MAX_STRING_BYTES, MappedReading, MappedValue, NodeClass,
+        NodeId, Quality, SampleTimestamps, StatusCode, TagType, ValueScaling, VariableNode,
+        WriteClient, WritePrincipal, WriteRejection, WriteRequest, publish_data_type,
+        status_code_for_write_rejection,
     };
 }
 

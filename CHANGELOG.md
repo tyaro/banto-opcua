@@ -5,6 +5,24 @@
 
 ## [Unreleased]
 
+数値と文字列のタグを元の型のまま公開する（ADR-0007、#56）。公開 API に互換でない変更がある。
+
+### 追加
+
+- core の `DataType` と `MappedValue` に Int16・UInt16・Int32・UInt32・Int64・UInt64・Float・String。サーバーは Variant と DataType 属性をその型のまま作り、Write もその型で受ける。
+- core の `publish_data_type(TagType, ValueScaling)`。スケーリングしていない数値は元の型、スケーリング後の工学値は Double、`bit` は Boolean、`string` は String。
+- core の `MappedValue::from_number`（f64 から丸めずに変える）、`MappedValue::data_type`、`MappedValue::is_publishable_as`、`map_typed_value`、`MAX_STRING_BYTES`（4096）、`MappedValue` の `Display`。
+- core の `From<MappedValue> for ScalarValue` と `TryFrom<ScalarValue> for MappedValue`（SByte と Byte は `NotPublishable`）。
+- サーバーの `TagReading::typed`。64 ビットの整数や String を f64 を経由せずに渡す。
+
+### 変更
+
+- `publish_decision` と `PublishDecision` を廃止した。`publish_data_type` に置き換える。`string` のタグも String で公開する。
+- `TagReading::value` を `Option<f64>` から `Option<MappedValue>` にした。`TagReading::new` は `Option<f64>` を受けたまま `from_number` で変える（`const fn` ではなくなった）。
+- `MappedValue`・`MappedReading`・`TagReading` は `Copy` ではなくなった（String を持つため）。
+- `DataType` と `MappedValue` を網羅的に `match` していた利用者は、新しい型の腕が要る。
+- f64 から整数の型への写像は、範囲外と小数を値なし・汎用 Bad にする。Write では、非有限の Float と上限を超える String を `BadOutOfRange`、ノードと違う型を `BadTypeMismatch` にする。
+
 ## [0.2.0] - 2026-11-05
 
 Hub のドライバ向けの OPC UA クライアントの部品（ADR-0005、#33）と、購読モード
