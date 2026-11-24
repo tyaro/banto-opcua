@@ -34,10 +34,13 @@ Description・EngineeringUnits・EURange が無く、渡す口も無かった。
   BaseDataVariableType に属性を足すより読み取りやすい。
 - **変更。** 型定義と、どのプロパティを持つか（ノードの形）が同じなら、同じ NodeId のまま
   Description とプロパティの値を書き換え、購読者へ通知する。
-  - 単位・レンジ・文言の値が変わったときは、タグ本体の Value の購読者にも、StatusCode に
-    SemanticsChanged のビットを立てた通知を送る（OPC 10000-8 5.2、BaseAnalogType・
-    TwoStateDiscreteType の規定）。値・品質・時刻はそのままで、次の値の更新でビットは消える。
-    説明だけの変更では立てない。
+  - 単位・レンジ・文言の値が変わったときは、タグ本体の Value の監視項目ごとに、StatusCode に
+    SemanticsChanged のビットを立てた通知を 1 件送る（OPC 10000-8 5.2、BaseAnalogType・
+    TwoStateDiscreteType の規定、OPC 10000-4 7.38.1）。値・品質・時刻はそのまま。ビットは
+    保存した値には立てないので、通常の Read には出ない。説明だけの変更では立てない。
+  - 既知の制限: 監視項目のキューがあふれてビット付きの通知が捨てられたとき、OPC 10000-4 7.38.1 は
+    次の通知へビットを引き継ぐよう求めるが、async-opcua のキューはこれをしない。直すには
+    async-opcua 側の変更が要る。
   - 意味を決めるプロパティの AccessLevel には、CurrentRead に SemanticChange を足す
     （OPC 10000-3 5.6.2）。書き換わりうるプロパティだとクライアントに知らせる。
   - 利用する側（クライアント）は、SemanticsChanged のビットを見たらプロパティを読み直す。

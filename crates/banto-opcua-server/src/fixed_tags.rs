@@ -424,19 +424,6 @@ impl FixedTags {
             variable.set_data_value(DataValue::new_now(value));
             changed.push((node.clone(), AttributeId::Value));
         }
-        // 単位・レンジ・文言が変わったら、値の購読者にも SemanticsChanged で知らせる
-        // （OPC 10000-8 5.2）。値・品質・時刻はそのまま。次の値の更新でビットは消える。
-        if semantics_changed && let Some(NodeType::Variable(variable)) = space.find_mut(&id) {
-            let mut value = current_value(variable);
-            value.status = Some(
-                value
-                    .status
-                    .unwrap_or(StatusCode::Good)
-                    .set_semantics_changed(true),
-            );
-            variable.set_data_value(value);
-            changed.push((id.clone(), AttributeId::Value));
-        }
         handle.subscriptions().maybe_notify(
             changed.iter().map(|(node, attribute)| (node, *attribute)),
             |id, attribute, range, encoding| {
@@ -448,6 +435,23 @@ impl FixedTags {
                 )
             },
         );
+        // 単位・レンジ・文言が変わったら、値の購読者へ SemanticsChanged を立てた通知を
+        // 1 件ずつ送る（OPC 10000-8 5.2、OPC 10000-4 7.38.1）。保存した値には立てない
+        // ので、通常の Read には出ない。値・品質・時刻はそのまま。
+        if semantics_changed && let Some(NodeType::Variable(variable)) = space.find(&id) {
+            let mut value = current_value(variable);
+            value.status = Some(
+                value
+                    .status
+                    .unwrap_or(StatusCode::Good)
+                    .set_semantics_changed(true),
+            );
+            handle.subscriptions().notify_data_change(std::iter::once((
+                value,
+                &id,
+                AttributeId::Value,
+            )));
+        }
         Ok(())
     }
 

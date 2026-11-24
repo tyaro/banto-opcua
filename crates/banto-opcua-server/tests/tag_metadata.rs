@@ -668,6 +668,11 @@ async fn semantic_changes_reach_value_subscribers_with_the_semantics_changed_bit
         changed.source_timestamp, first.source_timestamp,
         "採取時刻もそのまま"
     );
+    let read_after = read(&session, &temperature, AttributeId::Value).await;
+    assert!(
+        !read_after.status().semantics_changed(),
+        "ビットは通知だけに付け、通常の Read には出さない: {read_after:?}"
+    );
 
     server
         .update_tag_reading(
@@ -681,7 +686,7 @@ async fn semantic_changes_reach_value_subscribers_with_the_semantics_changed_bit
     assert_eq!(next.value, Some(Variant::Double(851.0)));
     assert!(
         !next.status().semantics_changed(),
-        "次の値の更新でビットは消える"
+        "次の値の通知にはビットを付けない"
     );
 
     let shape_change = server.update_tag_metadata(

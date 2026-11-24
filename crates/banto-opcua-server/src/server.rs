@@ -371,8 +371,9 @@ impl RunningServer {
     ///
     /// Description 属性とプロパティの Value を購読しているクライアントへは、変更を
     /// 通知する。単位・レンジ・文言の値が変わったら、タグ本体の Value の購読者にも
-    /// StatusCode に SemanticsChanged を立てて通知する（値・品質・時刻はそのまま。
-    /// 次の [`Self::update_tag_reading`] でビットは消える）。サンプルタグには付けられない。
+    /// StatusCode に SemanticsChanged を立てた通知を、監視項目ごとに 1 件送る（値・品質・
+    /// 時刻はそのまま）。ビットは保存した値には立てないので、通常の Read には出ない。
+    /// サンプルタグには付けられない。
     pub fn update_tag_metadata(
         &self,
         connection: &str,
