@@ -132,29 +132,54 @@ async fn invalid_typed_values_are_published_as_bad_without_a_value() {
             )
             .expect("更新する");
     }
-    // f64 からの変換は丸めない。
+    // f64 からの変換は丸めない（小数の整数、f32 で表せない値）。
+    for (name, data_type, number) in [
+        ("I16", DataType::Int16, 1.5),
+        ("U32", DataType::UInt32, -1.0),
+        ("F32", DataType::Float, 0.1),
+    ] {
+        server
+            .update_tag_reading(
+                CONNECTION,
+                GROUP,
+                name,
+                TagReading::new(
+                    data_type,
+                    Some(number),
+                    Quality::Good,
+                    SampleTimestamps::new(Some(now), now),
+                ),
+            )
+            .expect("更新する");
+    }
     server
         .update_tag_reading(
             CONNECTION,
             GROUP,
-            "I16",
+            "F64",
             TagReading::new(
-                DataType::Int16,
-                Some(1.5),
+                DataType::Double,
+                Some(0.1),
                 Quality::Good,
                 SampleTimestamps::new(Some(now), now),
             ),
         )
-        .expect("更新する");
+        .expect("Double の 0.1 はそのまま");
 
     let readings = client
-        .read_batch(&[tag("F32"), tag("I64"), tag("Text"), tag("I16")])
+        .read_batch(&[tag("F32"), tag("I64"), tag("Text"), tag("I16"), tag("U32")])
         .await
         .expect("まとめて読む");
     for reading in readings {
         assert_eq!(reading.status, ClientStatus::BAD);
         assert_eq!(reading.value, None);
     }
+    let double = client
+        .read_batch(&[tag("F64")])
+        .await
+        .expect("読む")
+        .remove(0);
+    assert_eq!(double.value, Some(ScalarValue::Double(0.1)));
     drop(client);
     server.shutdown().await.expect("止める");
 }

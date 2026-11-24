@@ -21,7 +21,7 @@
 - `TagReading::value` を `Option<f64>` から `Option<MappedValue>` にした。`TagReading::new` は `Option<f64>` を受けたまま `from_number` で変える（`const fn` ではなくなった）。
 - `MappedValue`・`MappedReading`・`TagReading` は `Copy` ではなくなった（String を持つため）。
 - `DataType` と `MappedValue` を網羅的に `match` していた利用者は、新しい型の腕が要る。
-- f64 から整数の型への写像は、範囲外と小数を値なし・汎用 Bad にする。Write では、非有限の Float と上限を超える String を `BadOutOfRange`、ノードと違う型を `BadTypeMismatch` にする。
+- f64 から整数の型への写像は、範囲外と小数を値なし・汎用 Bad にする。Float は f32 で正確に表せる値だけを受け、0.1 のように丸まる値や 0 に落ちる値は値なし・汎用 Bad にする。Write では、非有限の Float と上限を超える String を `BadOutOfRange`、ノードと違う型を `BadTypeMismatch` にする。
 
 ## [0.2.0] - 2026-11-05
 

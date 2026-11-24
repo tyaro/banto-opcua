@@ -153,7 +153,9 @@ impl MappedValue {
     /// ハブの f64 の値を、公開する型の値へ変える。表せなければ `None`。
     ///
     /// 丸めない。Boolean は 0 / 1（`-0.0` は false）、整数の型はその型の範囲の
-    /// 整数、Float は f32 の範囲の有限値、Double は有限値だけを受ける。String は
+    /// 整数、Float は f32 で正確に表せる有限値（f32 から広げた値。f32 にして f64 へ
+    /// 戻すと元の値に戻るもの）、Double は有限値だけを受ける。f64 の 0.1 や、f32 では
+    /// 0 に落ちる 1e-50 は Float にしない。String は
     /// 数値から作らないので常に `None`。
     pub fn from_number(data_type: DataType, number: f64) -> Option<Self> {
         if !number.is_finite() {
@@ -188,7 +190,8 @@ impl MappedValue {
             DataType::UInt64 if integral && (0.0..U64_END).contains(&number) => {
                 Self::UInt64(number as u64)
             }
-            DataType::Float if number.abs() <= f64::from(f32::MAX) => Self::Float(number as f32),
+            // 範囲外は inf、表せない値は近い値か 0 に丸まるので、往復で一致するものだけ。
+            DataType::Float if f64::from(number as f32) == number => Self::Float(number as f32),
             DataType::Double => Self::Double(number),
             _ => return None,
         })
@@ -398,6 +401,24 @@ mod tests {
             ),
             (DataType::UInt64, 18_446_744_073_709_551_616.0, None),
             (DataType::Float, 1.5, Some(MappedValue::Float(1.5))),
+            (DataType::Float, -0.0, Some(MappedValue::Float(-0.0))),
+            (
+                DataType::Float,
+                f64::from(0.1_f32),
+                Some(MappedValue::Float(0.1)),
+            ),
+            (
+                DataType::Float,
+                f64::from(f32::MAX),
+                Some(MappedValue::Float(f32::MAX)),
+            ),
+            (
+                DataType::Float,
+                f64::from(f32::from_bits(1)),
+                Some(MappedValue::Float(f32::from_bits(1))),
+            ),
+            (DataType::Float, 0.1, None),
+            (DataType::Float, 1e-50, None),
             (DataType::Float, f64::from(f32::MAX) * 2.0, None),
             (DataType::Double, 12.5, Some(MappedValue::Double(12.5))),
             (DataType::Boolean, -0.0, Some(MappedValue::Boolean(false))),
