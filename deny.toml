@@ -11,7 +11,7 @@
 
 [licenses]
 # 2026-10-15 実測（cargo deny 0.20.2、`cargo deny list`）。
-# 2026-11-24 再実測（cargo deny 0.22.0）。async-opcua の固定を 60f53f9 へ移して
+# 2026-11-24 再実測（cargo deny 0.22.0）。async-opcua の固定を 0b9e245 へ移して
 # BSD-2-Clause・BSD-3-Clause が依存木から消えたので外した（#59）。
 # 依存木に現れなかったライセンスは入れない。r-efi の
 # `MIT OR Apache-2.0 OR LGPL-2.1-or-later` は MIT で充足するので

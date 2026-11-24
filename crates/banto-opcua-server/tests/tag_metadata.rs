@@ -979,3 +979,90 @@ async fn semantics_changed_survives_a_queue_of_one_overwritten_before_publish() 
 
     server.shutdown().await.expect("止める");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn semantics_changed_survives_a_sample_replaced_within_the_sampling_interval() {
+    let server = OpcUaServer::start(ServerConfig::default().with_port(0).with_sample_tags(false))
+        .await
+        .expect("サーバーを起動する");
+    // 採取時刻を少し先にし、単位の変更を載せた通知が採取の間隔の中で保留されるようにする。
+    let sampled = SystemTime::now() + Duration::from_secs(2);
+    let at = |offset_ms: u64, number: f64| {
+        let time = sampled + Duration::from_millis(offset_ms);
+        TagReading::new(
+            DataType::Double,
+            Some(number),
+            Quality::Good,
+            SampleTimestamps::new(Some(time), time),
+        )
+    };
+    server
+        .add_tag_reading_with_metadata(
+            CONNECTION,
+            GROUP,
+            "Temperature",
+            at(0, 850.0),
+            &temperature_metadata(),
+        )
+        .expect("登録する");
+    let (session, _pki) = connect(&server).await;
+    let temperature = tag_id(&server, "Temperature");
+
+    let (sender, mut changes) = mpsc::unbounded_channel();
+    let subscription = session
+        .create_subscription(
+            Duration::from_millis(100),
+            30,
+            10,
+            0,
+            0,
+            true,
+            DataChangeCallback::new(move |value, _item| {
+                let _ = sender.send(value);
+            }),
+        )
+        .await
+        .expect("購読を作る");
+    // 採取の間隔が正の監視項目では、間隔より早く来た値は保留され、次の値で置き換わる。
+    let mut request: MonitoredItemCreateRequest = temperature.clone().into();
+    request.requested_parameters.sampling_interval = 1000.0;
+    request.requested_parameters.queue_size = 5;
+    session
+        .create_monitored_items(subscription, TimestampsToReturn::Both, vec![request])
+        .await
+        .expect("採取の間隔が 1 秒の監視項目を作る");
+    let first = recv(&mut changes).await;
+    assert_eq!(first.value, Some(Variant::Double(850.0)));
+
+    server
+        .update_tag_metadata(
+            CONNECTION,
+            GROUP,
+            "Temperature",
+            &TagMetadata::new()
+                .with_engineering_units(EngineeringUnits::display("K").with_unece_code("KEL"))
+                .with_eu_range(EuRange::new(273.0, 1473.0)),
+        )
+        .expect("単位とレンジを変える");
+    server
+        .update_tag_reading(
+            CONNECTION,
+            GROUP,
+            "Temperature",
+            reading(DataType::Double, 851.0),
+        )
+        .expect("すぐに値を更新する");
+
+    let next = recv(&mut changes).await;
+    assert_eq!(
+        next.value,
+        Some(Variant::Double(851.0)),
+        "最初の通知は次の測定値"
+    );
+    assert!(
+        next.status().semantics_changed(),
+        "保留中に置き換わった値の SemanticsChanged は次の通知に引き継ぐ: {next:?}"
+    );
+
+    server.shutdown().await.expect("止める");
+}

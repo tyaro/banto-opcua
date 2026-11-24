@@ -38,8 +38,8 @@ Description・EngineeringUnits・EURange が無く、渡す口も無かった。
     SemanticsChanged のビットを立てた通知を 1 件送る（OPC 10000-8 5.2、BaseAnalogType・
     TwoStateDiscreteType の規定、OPC 10000-4 7.38.1）。値・品質・時刻はそのまま。ビットは
     保存した値には立てないので、通常の Read には出ない。説明だけの変更では立てない。
-  - 監視項目のキューがあふれてビット付きの通知が捨てられたときは、次の通知へビットを引き継ぐ
-    （OPC 10000-4 7.38.1）。async-opcua のキューはこれをしなかったので、fork を直して固定を移した
+  - ビット付きの値が通知の前に捨てられたとき（キューがあふれた、採取の間隔で保留した値が次の値に
+    置き換わった、キューを縮めた）は、次の通知へビットを引き継ぐ（OPC 10000-4 7.38.1）。async-opcua のキューはこれをしなかったので、fork を直して固定を移した
     （ADR-0001 の 2026-11-24、[#59](https://github.com/tyaro/banto-opcua/issues/59)）。
   - 意味を決めるプロパティの AccessLevel には、CurrentRead に SemanticChange を足す
     （OPC 10000-3 5.6.2）。書き換わりうるプロパティだとクライアントに知らせる。
