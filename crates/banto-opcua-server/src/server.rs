@@ -11,11 +11,11 @@ use std::{
 
 use opcua::{
     server::{ANONYMOUS_USER_TOKEN_ID, ServerBuilder, ServerEndpoint, ServerHandle},
-    types::{DataValue, Variant},
+    types::DataValue,
 };
 use tokio::{net::TcpListener, task::JoinHandle};
 
-use banto_opcua_core::{DataType, MappedValue, Quality, SampleTimestamps};
+use banto_opcua_core::{DataType, MAX_STRING_BYTES, MappedValue, Quality, SampleTimestamps};
 
 use crate::{
     Error, ServerConfig, TagReading, WriteHandler,
@@ -23,6 +23,7 @@ use crate::{
         host_is_loopback, host_is_unspecified, normalize_endpoint_path, valid_advertised_host,
     },
     fixed_tags::{self, FixedTags},
+    reading,
     tag_manager::WritePath,
 };
 
@@ -316,15 +317,12 @@ impl RunningServer {
         tag: &str,
         value: MappedValue,
     ) -> Result<(), Error> {
-        let value = match value {
-            MappedValue::Boolean(bit) => Variant::Boolean(bit),
-            MappedValue::Double(number) if number.is_finite() => Variant::Double(number),
-            MappedValue::Double(_) => {
-                return Err(Error::TagUpdate(
-                    "タグの初期値は有限値にしてください".to_owned(),
-                ));
-            }
-        };
+        if !value.is_publishable_as(value.data_type()) {
+            return Err(Error::TagUpdate(format!(
+                "タグの初期値は有限値、String は {MAX_STRING_BYTES} バイト以下にしてください"
+            )));
+        }
+        let value = reading::variant(value);
         self.fixed_tags
             .add_tag(&self.handle, connection, group, tag, value)
     }
@@ -478,7 +476,7 @@ mod tests {
 
     use opcua::{
         server::address_space::NodeType,
-        types::{DataEncoding, NodeId, NumericRange, TimestampsToReturn},
+        types::{DataEncoding, NodeId, NumericRange, TimestampsToReturn, Variant},
     };
 
     use super::*;

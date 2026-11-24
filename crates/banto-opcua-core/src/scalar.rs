@@ -1,7 +1,10 @@
 //! クライアントが外部のサーバーと読み書きする値（ADR-0005）。
 //!
-//! サーバー側の [`crate::MappedValue`] は公開する型を Boolean と Double に固定して
-//! いるが、クライアントは相手のノードの型をそのまま扱う。型の変換はしない。
+//! クライアントは相手のノードの型をそのまま扱う。型の変換はしない。サーバー側の
+//! [`crate::MappedValue`] とは SByte と Byte の有無だけが違い、互いの変換は
+//! `From` / `TryFrom` で行う（ADR-0007）。
+
+use crate::MappedValue;
 
 /// OPC UA のスカラーの組み込み型のうち、クライアントが扱う値。
 ///
@@ -102,6 +105,59 @@ impl std::fmt::Display for ScalarType {
     }
 }
 
+impl From<MappedValue> for ScalarValue {
+    fn from(value: MappedValue) -> Self {
+        match value {
+            MappedValue::Boolean(value) => Self::Boolean(value),
+            MappedValue::Int16(value) => Self::Int16(value),
+            MappedValue::UInt16(value) => Self::UInt16(value),
+            MappedValue::Int32(value) => Self::Int32(value),
+            MappedValue::UInt32(value) => Self::UInt32(value),
+            MappedValue::Int64(value) => Self::Int64(value),
+            MappedValue::UInt64(value) => Self::UInt64(value),
+            MappedValue::Float(value) => Self::Float(value),
+            MappedValue::Double(value) => Self::Double(value),
+            MappedValue::String(value) => Self::String(value),
+        }
+    }
+}
+
+/// サーバーが公開しない型（SByte と Byte）の値。持っているのはその型。
+///
+/// 型を黙って広げない。広げるなら呼び出し側が型を決めて変換する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotPublishable(pub ScalarType);
+
+impl std::fmt::Display for NotPublishable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} はサーバーが公開しない型です", self.0)
+    }
+}
+
+impl std::error::Error for NotPublishable {}
+
+impl TryFrom<ScalarValue> for MappedValue {
+    type Error = NotPublishable;
+
+    fn try_from(value: ScalarValue) -> Result<Self, Self::Error> {
+        Ok(match value {
+            ScalarValue::Boolean(value) => Self::Boolean(value),
+            ScalarValue::Int16(value) => Self::Int16(value),
+            ScalarValue::UInt16(value) => Self::UInt16(value),
+            ScalarValue::Int32(value) => Self::Int32(value),
+            ScalarValue::UInt32(value) => Self::UInt32(value),
+            ScalarValue::Int64(value) => Self::Int64(value),
+            ScalarValue::UInt64(value) => Self::UInt64(value),
+            ScalarValue::Float(value) => Self::Float(value),
+            ScalarValue::Double(value) => Self::Double(value),
+            ScalarValue::String(value) => Self::String(value),
+            ScalarValue::SByte(_) | ScalarValue::Byte(_) => {
+                return Err(NotPublishable(value.scalar_type()));
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +186,40 @@ mod tests {
             })
             .collect();
         assert_eq!(names.len(), cases.len());
+    }
+
+    #[test]
+    fn mapped_values_round_trip_through_scalar_values() {
+        for value in [
+            MappedValue::Boolean(true),
+            MappedValue::Int16(-1),
+            MappedValue::UInt16(1),
+            MappedValue::Int32(-1),
+            MappedValue::UInt32(1),
+            MappedValue::Int64(i64::MIN),
+            MappedValue::UInt64(u64::MAX),
+            MappedValue::Float(1.5),
+            MappedValue::Double(1.5),
+            MappedValue::String("a".into()),
+        ] {
+            let scalar = ScalarValue::from(value.clone());
+            assert_eq!(
+                scalar.scalar_type().to_string(),
+                value.data_type().to_string()
+            );
+            assert_eq!(MappedValue::try_from(scalar), Ok(value));
+        }
+    }
+
+    #[test]
+    fn sbyte_and_byte_are_not_widened() {
+        assert_eq!(
+            MappedValue::try_from(ScalarValue::SByte(-1)),
+            Err(NotPublishable(ScalarType::SByte))
+        );
+        assert_eq!(
+            MappedValue::try_from(ScalarValue::Byte(1)),
+            Err(NotPublishable(ScalarType::Byte))
+        );
     }
 }

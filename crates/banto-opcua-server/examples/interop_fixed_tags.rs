@@ -12,10 +12,7 @@ use std::{
 
 use banto_opcua_server::{
     OpcUaServer, ServerConfig, TagReading, WriteFuture, WriteHandler,
-    model::{
-        DataType, MappedValue, Quality, SampleTimestamps, WritePrincipal, WriteRejection,
-        WriteRequest,
-    },
+    model::{MappedValue, Quality, SampleTimestamps, WritePrincipal, WriteRejection, WriteRequest},
 };
 
 const CONNECTION: &str = "PLC2";
@@ -33,10 +30,7 @@ impl WriteHandler for Recorder {
             if request.tag == "Locked" {
                 return Err(WriteRejection::OutOfService);
             }
-            let value = match request.value {
-                MappedValue::Boolean(bit) => bit.to_string(),
-                MappedValue::Double(number) => number.to_string(),
-            };
+            let value = request.value.to_string();
             let principal = match request.principal {
                 WritePrincipal::Anonymous => "anonymous",
                 _ => "other",
@@ -92,18 +86,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map_err(|_| "書き込みの記録を読めません")?
                     .take()
                     .ok_or("反映する書き込みがありません")?;
-                let (data_type, value) = match request.value {
-                    MappedValue::Boolean(bit) => (DataType::Boolean, f64::from(u8::from(bit))),
-                    MappedValue::Double(number) => (DataType::Double, number),
-                };
                 let now = SystemTime::now();
                 server.update_tag_reading(
                     &request.connection,
                     &request.group,
                     &request.tag,
-                    TagReading::new(
-                        data_type,
-                        Some(value),
+                    TagReading::typed(
+                        request.value.data_type(),
+                        Some(request.value),
                         Quality::Good,
                         SampleTimestamps::new(Some(now), now),
                     ),

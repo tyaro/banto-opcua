@@ -33,3 +33,4 @@
 | [0004](0004-write-through-host-handler.md) | OPC UA の Write を利用者が渡す書き込みハンドラーに通す | Accepted |
 | [0005](0005-client-as-hub-driver.md) | OPC UA クライアントを Hub のドライバ向けの部品として作る | Accepted |
 | [0006](0006-client-subscription-latest-values.md) | クライアントの購読モードでは、購読で受けた最新値を部品が持つ | Proposed |
+| [0007](0007-publish-native-data-types.md) | 数値と文字列のタグを元の型のまま公開する | Accepted |

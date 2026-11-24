@@ -18,7 +18,7 @@ use opcua::{
         },
     },
     sync::RwLock,
-    types::{AttributeId, DataTypeId, NodeId, NumericRange, StatusCode, Variant},
+    types::{AttributeId, NodeId, NumericRange, StatusCode, Variant},
 };
 use tokio::sync::Semaphore;
 
@@ -26,7 +26,7 @@ use banto_opcua_core::{
     MappedValue, WriteClient, WritePrincipal, WriteRequest, status_code_for_write_rejection,
 };
 
-use crate::WriteHandler;
+use crate::{WriteHandler, reading};
 
 pub(crate) type TagNodeManager = InMemoryNodeManager<TagNodeManagerImpl>;
 
@@ -217,23 +217,37 @@ fn check_write(
     if request.value.status.is_some_and(|status| !status.is_good()) {
         return Err(StatusCode::BadWriteNotSupported);
     }
-    let data_type = variable.data_type();
-    let value = match &request.value.value {
-        Some(Variant::Boolean(bit)) if data_type == DataTypeId::Boolean => {
-            MappedValue::Boolean(*bit)
-        }
-        Some(Variant::Double(number)) if data_type == DataTypeId::Double => {
-            if !number.is_finite() {
-                return Err(StatusCode::BadOutOfRange);
-            }
-            MappedValue::Double(*number)
-        }
-        _ => return Err(StatusCode::BadTypeMismatch),
-    };
+    let value = request
+        .value
+        .value
+        .clone()
+        .and_then(mapped_value)
+        .filter(|value| variable.data_type() == reading::data_type_id(value.data_type()))
+        .ok_or(StatusCode::BadTypeMismatch)?;
+    if !value.is_publishable_as(value.data_type()) {
+        return Err(StatusCode::BadOutOfRange);
+    }
     // 書き込み可にできるのは動的タグだけなので、ここで外部名が無いのは同期のずれ。
     let name = tags
         .get(&request.node_id)
         .cloned()
         .ok_or(StatusCode::BadNotWritable)?;
     Ok((name, value))
+}
+
+/// Write の Variant を core の値へ写す。公開する型に無い Variant と null の String は `None`。
+fn mapped_value(variant: Variant) -> Option<MappedValue> {
+    Some(match variant {
+        Variant::Boolean(value) => MappedValue::Boolean(value),
+        Variant::Int16(value) => MappedValue::Int16(value),
+        Variant::UInt16(value) => MappedValue::UInt16(value),
+        Variant::Int32(value) => MappedValue::Int32(value),
+        Variant::UInt32(value) => MappedValue::UInt32(value),
+        Variant::Int64(value) => MappedValue::Int64(value),
+        Variant::UInt64(value) => MappedValue::UInt64(value),
+        Variant::Float(value) => MappedValue::Float(value),
+        Variant::Double(value) => MappedValue::Double(value),
+        Variant::String(value) => MappedValue::String(value.value().clone()?),
+        _ => return None,
+    })
 }
