@@ -132,6 +132,15 @@ async fn invalid_typed_values_are_published_as_bad_without_a_value() {
             )
             .expect("更新する");
     }
+    // F32 は下で f64 の 0.1 に上書きするので、NaN の Bad をここで読んでおく。
+    let nan = client
+        .read_batch(&[tag("F32")])
+        .await
+        .expect("読む")
+        .remove(0);
+    assert_eq!(nan.status, ClientStatus::BAD);
+    assert_eq!(nan.value, None);
+
     // f64 からの変換は丸めない（小数の整数、f32 で表せない値）。
     for (name, data_type, number) in [
         ("I16", DataType::Int16, 1.5),
