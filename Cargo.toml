@@ -26,9 +26,10 @@ banto-opcua-pki = { path = "crates/banto-opcua-pki" }
 # ADR-0001。default-features は空で、server / client は各クレートが必要な
 # feature だけを有効にする（両方を core へ入れない）。
 # 0.19.0 未収録の品質変更通知修正（upstream #274）、採取時刻保持修正（fork PR #1）、
-# 接続終了時のサービス中止（fork PR #2、ADR-0004）。
+# 接続終了時のサービス中止（fork PR #2、ADR-0004）、証明書の保存名を拇印だけにし
+# IPv6 のホスト名を照合する修正（fork の fix/thumbprint-cert-file-names、ADR-0009）。
 # #17: これらを含む公開版が出たら crates.io に戻す。
-async-opcua = { git = "https://github.com/tyaro/async-opcua", rev = "c0de87ba66178e66e4b3a4ea95f4845e375b04fb", default-features = false }
+async-opcua = { git = "https://github.com/tyaro/async-opcua", rev = "a08a53a1ef00b68bcde44625d5b9cd53cc4010d0", default-features = false }
 # クライアントのイベントループのストリームを回す。async-opcua が既に引いている。
 futures-util = { version = "0.3", default-features = false }
 thiserror = "2"

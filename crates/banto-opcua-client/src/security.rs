@@ -132,29 +132,36 @@ pub(crate) fn endpoint_info(endpoint: &EndpointDescription) -> EndpointInfo {
 
 /// 設定の SecurityPolicy・MessageSecurityMode・利用者に合うエンドポイントを選ぶ。
 /// URL のホストは、サーバーが広告したものではなく設定のものに置き換える。
+///
+/// 同じ SecurityPolicy と MessageSecurityMode の組を、トークンの種類ごとに別の
+/// エンドポイントで広告するサーバーがあるので、トークンの種類まで合う候補だけから選ぶ。
 pub(crate) fn select_endpoint(
     endpoints: &[EndpointDescription],
     config: &ClientConfig,
 ) -> Result<EndpointDescription, Error> {
     let token_type = config.identity.token_type();
-    Client::find_matching_endpoint(
-        endpoints,
-        &config.endpoint_url,
-        ua_policy(config.security_policy),
-        ua_mode(config.security_mode),
-    )
-    .filter(|endpoint| {
-        endpoint
-            .user_identity_tokens
-            .iter()
-            .flatten()
-            .any(|policy| core_token_type(policy.token_type) == token_type)
-    })
-    .ok_or(Error::EndpointNotFound {
-        security_policy: config.security_policy,
-        security_mode: config.security_mode,
-        token_type,
-    })
+    endpoints
+        .iter()
+        .filter(|endpoint| {
+            endpoint
+                .user_identity_tokens
+                .iter()
+                .flatten()
+                .any(|policy| core_token_type(policy.token_type) == token_type)
+        })
+        .find_map(|endpoint| {
+            Client::find_matching_endpoint(
+                std::slice::from_ref(endpoint),
+                &config.endpoint_url,
+                ua_policy(config.security_policy),
+                ua_mode(config.security_mode),
+            )
+        })
+        .ok_or(Error::EndpointNotFound {
+            security_policy: config.security_policy,
+            security_mode: config.security_mode,
+            token_type,
+        })
 }
 
 /// セッションを開く前に、サーバーの証明書を自分の信頼の一覧と照らす。
@@ -309,8 +316,33 @@ mod tests {
             "opc.tcp://127.0.0.1:4840/",
             "ホストは設定のものにする"
         );
-        let err = select_endpoint(&endpoints, &config.with_user_name("u", "p"))
-            .expect_err("UserName は広告されていない");
+        // 同じ組を Anonymous と UserName で別々に広告する。どちらの順でも選べる。
+        let mut user_name = endpoint(
+            SecurityPolicy::Basic256Sha256,
+            MessageSecurityMode::SignAndEncrypt,
+        );
+        user_name.user_identity_tokens = Some(vec![UserTokenPolicy {
+            token_type: UaUserTokenType::UserName,
+            ..Default::default()
+        }]);
+        let user_config = config.clone().with_user_name("u", "p");
+        for ordered in [
+            [endpoints[1].clone(), user_name.clone()],
+            [user_name.clone(), endpoints[1].clone()],
+        ] {
+            let selected = select_endpoint(&ordered, &user_config).expect("UserName を選べる");
+            assert_eq!(
+                selected.user_identity_tokens.expect("トークン")[0].token_type,
+                UaUserTokenType::UserName
+            );
+            let selected = select_endpoint(&ordered, &config).expect("Anonymous を選べる");
+            assert_eq!(
+                selected.user_identity_tokens.expect("トークン")[0].token_type,
+                UaUserTokenType::Anonymous
+            );
+        }
+        let err =
+            select_endpoint(&endpoints, &user_config).expect_err("UserName は広告されていない");
         assert!(matches!(
             err,
             Error::EndpointNotFound {

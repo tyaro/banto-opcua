@@ -59,7 +59,8 @@ Sign と SignAndEncrypt の 6 つを開き、SecurityPolicy `None` は
 Anonymous は `with_anonymous` で許す・許さないを選ぶ。UserName は
 `OpcUaServer::start_with_handlers` に渡す `UserAuthenticator` で照合し、
 banto-opcua は資格情報を持たない。クライアントの証明書は `pki_dir` の信頼の一覧で
-判断し、初めて来た証明書は拒否の一覧に置かれる。管理者は `RunningServer::trust_list()` で
+判断し、初めて来た証明書は拒否の一覧に置かれる（ファイル名は拇印だけから作り、両方に
+あれば拒否を優先する）。管理者は `RunningServer::trust_list()` で
 一覧を見て信頼に移す。受け付けた・断ったセッションと理由は
 `RunningServer::security_events()`。設計は [ADR-0009](docs/adr/0009-phase3-security.md)。
 書き込みは `OpcUaServer::start_with_write_handler` で渡す `WriteHandler` を通してだけ

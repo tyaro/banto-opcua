@@ -1,7 +1,11 @@
 //! 暗号化したエンドポイント、UserName の照合、証明書の信頼の一覧（ADR-0009）を、
 //! 本リポジトリのサーバーとクライアントの組で確かめる。
 
-use std::{path::Path, sync::Arc};
+use std::{
+    net::{IpAddr, Ipv6Addr},
+    path::Path,
+    sync::Arc,
+};
 
 use banto_opcua_client::{
     ClientConfig, Error as ClientError, OpcUaClient, TrustList, TrustState,
@@ -192,7 +196,6 @@ async fn certificates_are_trusted_explicitly_on_both_sides() {
 /// 利用者名は利用者の関数で照合し、断った理由はサーバーの記録にだけ残る。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_names_are_checked_by_the_host() {
-    let root = tempfile::tempdir().expect("試験用ディレクトリ");
     let (principals, mut received) = mpsc::unbounded_channel();
     let server = OpcUaServer::start_with_handlers(
         ServerConfig::default()
@@ -211,7 +214,13 @@ async fn user_names_are_checked_by_the_host() {
     server
         .set_tag_writable("PLC2", "Cell1", "Setpoint", true)
         .expect("書き込み可にする");
-    let config = secure(server.endpoint(), root.path()).with_trust_all_server_certificates(true);
+    let config = ClientConfig::new(server.endpoint())
+        .with_security(
+            SecurityPolicy::Basic256Sha256,
+            MessageSecurityMode::SignAndEncrypt,
+        )
+        .with_application("banto-test-client", "urn:banto:test:client")
+        .with_trust_all_server_certificates(true);
 
     let err = OpcUaClient::connect_with(config.clone())
         .await
@@ -285,6 +294,97 @@ async fn user_names_are_checked_by_the_host() {
     server.shutdown().await.expect("停止する");
 }
 
+/// 旧い async-opcua が `CN [拇印].der` の名前で書いた信頼の一覧も、起動で拇印だけの
+/// 名前へ移り、引き続き信頼される。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_trust_list_names_survive_a_restart() {
+    let root = tempfile::tempdir().expect("試験用ディレクトリ");
+    let server_pki = root.path().join("server");
+    let client_pki = root.path().join("client");
+    let start = || {
+        OpcUaServer::start(
+            ServerConfig::default()
+                .with_port(0)
+                .with_pki_dir(&server_pki),
+        )
+    };
+    let server = start().await.expect("サーバーを起動する");
+    TrustList::new(&client_pki)
+        .add_trusted(server.certificate_der())
+        .expect("サーバーの証明書を前もって信頼する");
+    let err = OpcUaClient::connect_with(secure(server.endpoint(), &client_pki))
+        .await
+        .expect_err("初回はサーバーに保留される");
+    assert!(
+        matches!(err, ClientError::ClientCertificateRejected(_)),
+        "{err}"
+    );
+    server.shutdown().await.expect("停止する");
+
+    // 保留された証明書を、旧い名前で信頼の一覧へ置いた状態にする。
+    let rejected = server_pki.join("rejected");
+    let entry = std::fs::read_dir(&rejected)
+        .expect("拒否の一覧")
+        .next()
+        .expect("1 件ある")
+        .expect("項目");
+    let stem = entry
+        .file_name()
+        .into_string()
+        .expect("名前")
+        .trim_end_matches(".der")
+        .to_owned();
+    std::fs::rename(
+        entry.path(),
+        server_pki
+            .join("trusted")
+            .join(format!("CN=banto-test-client [{stem}].der")),
+    )
+    .expect("旧い名前で信頼に置く");
+
+    let server = start().await.expect("同じ pki_dir で起動し直す");
+    let listed = server.trust_list().certificates().expect("一覧");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].state, TrustState::Trusted);
+    let client = OpcUaClient::connect_with(secure(server.endpoint(), &client_pki))
+        .await
+        .expect("移した信頼で接続できる");
+    client.disconnect().await.expect("切断する");
+    server.shutdown().await.expect("停止する");
+}
+
+/// IPv6 の URL（`[::1]`）で接続しても、証明書のホスト名の検査が通る。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn encrypted_connection_works_over_ipv6_loopback() {
+    if std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, 0)).is_err() {
+        assert!(
+            std::env::var("BANTO_OPCUA_REQUIRE_IPV6").ok().as_deref() != Some("1"),
+            "IPv6 の [::1] へ bind できません"
+        );
+        eprintln!("IPv6 の [::1] へ bind できないためスキップします");
+        return;
+    }
+    let root = tempfile::tempdir().expect("試験用ディレクトリ");
+    let server = OpcUaServer::start(
+        ServerConfig::default()
+            .with_port(0)
+            .with_bind(IpAddr::V6(Ipv6Addr::LOCALHOST))
+            .with_trust_all_client_certificates(true),
+    )
+    .await
+    .expect("サーバーを起動する");
+    assert!(server.endpoint().starts_with("opc.tcp://[::1]:"));
+    TrustList::new(root.path())
+        .add_trusted(server.certificate_der())
+        .expect("サーバーの証明書を信頼する");
+    let client = OpcUaClient::connect_with(secure(server.endpoint(), root.path()))
+        .await
+        .expect("IPv6 で暗号化して接続できる");
+    assert_eq!(client.read_server_state().await.expect("状態を読む"), 0);
+    client.disconnect().await.expect("切断する");
+    server.shutdown().await.expect("停止する");
+}
+
 #[tokio::test]
 async fn inconsistent_security_settings_are_rejected_before_bind() {
     for config in [
@@ -293,6 +393,9 @@ async fn inconsistent_security_settings_are_rejected_before_bind() {
             .with_none_endpoint(true)
             .with_anonymous(false),
         ServerConfig::default().with_security_policies([SecurityPolicy::None]),
+        ServerConfig::default()
+            .with_trust_all_client_certificates(true)
+            .with_pki_dir("unused"),
     ] {
         let err = OpcUaServer::start(config.with_port(0))
             .await

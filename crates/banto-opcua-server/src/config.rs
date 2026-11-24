@@ -95,7 +95,8 @@ pub struct ServerConfig {
     /// 知らないクライアントの証明書も信頼の一覧へ入れて受け付ける。試験用で、既定は入れない。
     ///
     /// 有効にすると、証明書を持つ誰でも暗号化したエンドポイントへ接続できる。
-    /// 起動時に警告ログを出す。
+    /// 起動時に警告ログを出す。本番の信頼の一覧を書き換えないよう、[`Self::pki_dir`] と
+    /// 一緒には使えない（起動はエラー）。一覧は起動ごとの一時ディレクトリに置く。
     pub trust_all_client_certificates: bool,
 }
 
@@ -261,6 +262,12 @@ impl ServerConfig {
         if self.security_modes.contains(&MessageSecurityMode::None) {
             return Err(
                 "security_modes に None は入れられません。with_none_endpoint を使ってください"
+                    .to_owned(),
+            );
+        }
+        if self.trust_all_client_certificates && self.pki_dir.is_some() {
+            return Err(
+                "trust_all_client_certificates は試験用です。pki_dir の信頼の一覧を書き換えないよう、pki_dir と一緒には使えません"
                     .to_owned(),
             );
         }
@@ -472,6 +479,9 @@ mod tests {
                 .with_none_endpoint(true)
                 .with_anonymous(false),
             ServerConfig::default().with_security_policies([]),
+            ServerConfig::default()
+                .with_trust_all_client_certificates(true)
+                .with_pki_dir("pki"),
         ] {
             assert!(config.endpoint_security().is_err(), "{config:?}");
         }

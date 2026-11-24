@@ -4,11 +4,11 @@ use std::{io, path::Path, time::SystemTime};
 
 use banto_opcua_core::CertificateInfo;
 use opcua::{
-    crypto::{CertificateStore, X509Data},
+    crypto::{CertificateStore, KeySize, PrivateKey, X509, X509Data},
     types::{ApplicationDescription, LocalizedText},
 };
 
-use crate::{info, trust};
+use crate::{TrustList, info, trust};
 
 /// `pki_dir` からの、自分の証明書の位置。
 pub const CERTIFICATE_PATH: &str = "own/cert.der";
@@ -64,12 +64,16 @@ impl ApplicationIdentity {
 /// - `dir` と `trusted/`・`rejected/` が無ければ作る。Unix では秘密鍵の親を
 ///   生成の前に 0700 にし（既存なら絞り）、生成後に秘密鍵を 0600 にする。
 /// - 証明書と秘密鍵の片方だけが残っていたら消す（初回生成の途中で落ちたなど）。
-/// - 両方あれば読み直す。読めない、ApplicationUri が違う、`identity.hosts` の
-///   どれかが SubjectAltName に無い、有効期間の外、のどれかなら、警告を出して
-///   両方を消し、作り直す（拇印が変わるので、相手は信頼し直す）。
+/// - 両方あれば読み直す。中身を証明書・秘密鍵として解釈できない、秘密鍵が証明書の
+///   公開鍵と組にならない、ApplicationUri が違う、`identity.hosts` のどれかが
+///   SubjectAltName に無い、有効期間の外、のどれかなら、警告を出して両方を消し、
+///   作り直す（拇印が変わるので、相手は信頼し直す）。
 /// - 無ければ 2048 ビットの RSA 鍵と、有効期間 5 年の証明書を作る。
+/// - 旧い名前の信頼の一覧を、拇印だけの名前へ移す（[`crate::TrustList::migrate`]）。
 ///
-/// 存在を確かめられない（権限エラーなど）ときは何も消さずに `Err` を返す。
+/// 存在を確かめられない、ファイルを読めない（権限エラー、一時的な I/O の失敗など）
+/// ときは、何も消さず何も作らずに `Err` を返す。中身が壊れているのと区別し、
+/// 一時的な障害で拇印を変えない。
 /// 同じディレクトリを、同時に起動する複数のプロセスで共有しない（生成が競合する）。
 pub fn prepare_own_certificate(
     dir: &Path,
@@ -78,12 +82,16 @@ pub fn prepare_own_certificate(
     std::fs::create_dir_all(dir)?;
     protect_private_dir(&dir.join(PRIVATE_KEY_PATH))?;
     trust::ensure_dirs(dir)?;
+    TrustList::new(dir).migrate()?;
     discard_unpaired_keypair(dir)?;
 
     let cert_path = dir.join(CERTIFICATE_PATH);
     let key_path = dir.join(PRIVATE_KEY_PATH);
     if cert_path.try_exists()? {
-        match check_existing(&cert_path, &key_path, identity) {
+        // 読めないのは I/O の障害で、`?` で止める。中身の不一致だけを作り直しにする。
+        let cert_bytes = std::fs::read(&cert_path)?;
+        let key_bytes = std::fs::read(&key_path)?;
+        match check_existing(&cert_bytes, &key_bytes, identity) {
             Ok(summary) => {
                 restrict_private_key(&key_path)?;
                 return Ok(summary);
@@ -115,14 +123,19 @@ pub fn prepare_own_certificate(
     Ok(info::summarize(&cert))
 }
 
-/// 既存の組を使えるか。使えなければ理由を返す。
+/// 読み込んだ組を使えるか。使えなければ理由を返す。
 fn check_existing(
-    cert_path: &Path,
-    key_path: &Path,
+    cert_bytes: &[u8],
+    key_bytes: &[u8],
     identity: &ApplicationIdentity,
 ) -> Result<CertificateInfo, String> {
-    let cert = CertificateStore::read_cert(cert_path)?;
-    CertificateStore::read_pkey(key_path)?;
+    let cert = X509::from_der(cert_bytes)
+        .or_else(|_| X509::from_pem(cert_bytes))
+        .map_err(|_| "証明書を解釈できません".to_owned())?;
+    let key = PrivateKey::from_pem(key_bytes).map_err(|_| "秘密鍵を解釈できません".to_owned())?;
+    if !key_matches(&cert, &key) {
+        return Err("秘密鍵が証明書の公開鍵と組になりません".to_owned());
+    }
     cert.is_application_uri_valid(&identity.application_uri)
         .map_err(|_| {
             format!(
@@ -139,6 +152,17 @@ fn check_existing(
         return Err("有効期間の外です".to_owned());
     }
     Ok(summary)
+}
+
+/// 秘密鍵で署名したものを、証明書の公開鍵で検証できるか。
+fn key_matches(cert: &X509, key: &PrivateKey) -> bool {
+    const PROBE: &[u8] = b"banto-opcua key pair check";
+    let Ok(public) = cert.public_key() else {
+        return false;
+    };
+    let mut signature = vec![0; key.size()];
+    key.sign_sha256(PROBE, &mut signature).is_ok()
+        && public.verify_sha256(PROBE, &signature).unwrap_or(false)
 }
 
 /// 証明書と秘密鍵の片方だけが残っていたら消す。
@@ -254,6 +278,49 @@ mod tests {
         std::fs::write(dir.join(CERTIFICATE_PATH), b"broken").expect("壊す");
         let second = prepare_own_certificate(dir, &identity()).expect("作り直す");
         assert_ne!(second.thumbprint, first.thumbprint);
+    }
+
+    /// 別の組の秘密鍵に差し替わっていたら、使わずに作り直す。
+    #[test]
+    fn mismatched_private_key_is_regenerated() {
+        let root = tempfile::tempdir().expect("試験用ディレクトリ");
+        let dir = root.path().join("pki");
+        let other = root.path().join("other");
+        let first = prepare_own_certificate(&dir, &identity()).expect("初回に作る");
+        prepare_own_certificate(&other, &identity()).expect("別の組を作る");
+        std::fs::copy(other.join(PRIVATE_KEY_PATH), dir.join(PRIVATE_KEY_PATH))
+            .expect("秘密鍵を差し替える");
+        let second = prepare_own_certificate(&dir, &identity()).expect("作り直す");
+        assert_ne!(second.thumbprint, first.thumbprint);
+        let again = prepare_own_certificate(&dir, &identity()).expect("今度は再利用");
+        assert_eq!(again, second);
+    }
+
+    /// 読めない（I/O の失敗）ときは作り直さず止め、ファイルも拇印も変えない。
+    /// root でも起こせるよう、秘密鍵の場所をディレクトリにして読めなくする。
+    #[test]
+    fn read_failure_keeps_the_existing_pair() {
+        let root = tempfile::tempdir().expect("試験用ディレクトリ");
+        let dir = root.path().join("pki");
+        let first = prepare_own_certificate(&dir, &identity()).expect("初回に作る");
+        let cert = std::fs::read(dir.join(CERTIFICATE_PATH)).expect("証明書");
+        let key_path = dir.join(PRIVATE_KEY_PATH);
+        let key = std::fs::read(&key_path).expect("秘密鍵");
+        let aside = root.path().join("key.pem");
+        std::fs::rename(&key_path, &aside).expect("秘密鍵をよける");
+        std::fs::create_dir(&key_path).expect("読めない秘密鍵");
+
+        prepare_own_certificate(&dir, &identity()).expect_err("読めなければ止める");
+        assert_eq!(
+            std::fs::read(dir.join(CERTIFICATE_PATH)).expect("証明書が残る"),
+            cert
+        );
+
+        std::fs::remove_dir(&key_path).expect("戻す");
+        std::fs::rename(&aside, &key_path).expect("戻す");
+        assert_eq!(std::fs::read(&key_path).expect("秘密鍵"), key);
+        let again = prepare_own_certificate(&dir, &identity()).expect("障害が去れば再利用");
+        assert_eq!(again, first);
     }
 
     /// 存在を確かめられないときは「無い」と扱わず、残っている鍵を消さない。

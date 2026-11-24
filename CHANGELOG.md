@@ -24,7 +24,7 @@ Phase 3 のセキュリティ（署名・暗号化、UserName、証明書の信�
 - クライアントの `ConnectedClient::read_metadata` と `NodeMetadata`。ノードの並びの Description と EngineeringUnits・EURange・TrueState・FalseState のプロパティを読み、`TagMetadata` で返す（型定義は問わない）。Description を持たないノード（`BadAttributeIdInvalid`）からも単位・レンジを読む。Read と TranslateBrowsePathsToNodeIds は `read_batch` と同じ規則で分けて送る。
 - core の StatusCode に `BAD_NODE_ID_INVALID` / `BAD_ATTRIBUTE_ID_INVALID`。
 - core の `SecurityPolicy`（None・Basic256Sha256・Aes128_Sha256_RsaOaep・Aes256_Sha256_RsaPss）、`MessageSecurityMode`、`UserTokenType`、`Password`（`Debug` に中身を出さない）、`UserNameLogin`、`UserRejection`、`CertificateInfo`。`WritePrincipal::User`。
-- 新しいクレート `banto-opcua-pki`。`prepare_own_certificate`（自分の鍵と自己署名の証明書を用意し、ApplicationUri・ホスト・有効期間が合わなければ作り直す。有効期間は 5 年）と、`TrustList`（`trusted/`・`rejected/` の一覧、`trust`・`reject`・`remove`・`add_trusted`・`add_pending`・`state_of`）。
+- 新しいクレート `banto-opcua-pki`。`prepare_own_certificate`（自分の鍵と自己署名の証明書を用意し、解釈できない・鍵と証明書が組にならない・ApplicationUri・ホスト・有効期間が合わないときは作り直す。読めない I/O の失敗では何も消さずに止める。有効期間は 5 年）と、`TrustList`（`trusted/`・`rejected/` の一覧、`trust`・`reject`・`remove`・`add_trusted`・`add_pending`・`state_of`・`migrate`）。一覧のファイル名は拇印だけから作り、両方にある証明書は拒否として扱う。旧い `CN [拇印].der` の名前は `migrate` が移す。
 - サーバーの `ServerConfig::with_security_policies`・`with_security_modes`・`with_none_endpoint`・`with_anonymous`・`with_trust_all_client_certificates`。
 - サーバーの `OpcUaServer::start_with_handlers` と `ServerHandlers`（書き込みハンドラーと `UserAuthenticator`）。UserName は暗号化したエンドポイントでだけ受け付け、照合を通したセッションの Write は主体が `WritePrincipal::User` になる。照合は 10 秒で打ち切る。
 - サーバーの `RunningServer::trust_list`・`certificate`・`certificate_der`・`security_events`（`SecurityEvent`・`SecurityEventKind`）。
@@ -36,6 +36,8 @@ Phase 3 のセキュリティ（署名・暗号化、UserName、証明書の信�
 
 ### 変更
 
+- async-opcua の固定を、証明書の保存名を拇印だけにし、IPv6 のホスト名を括弧なし・値で照合する fork の修正（`a08a53a`）へ移した（ADR-0009）。
+- `with_trust_all_client_certificates` / `with_trust_all_server_certificates` は試験用として、`pki_dir` と一緒には使えない（本番の一覧の拒否を上書きしない）。
 - サーバーの既定のエンドポイントを、Basic256Sha256・Aes128_Sha256_RsaOaep・Aes256_Sha256_RsaPss の Sign と SignAndEncrypt にした。`None` / Anonymous で接続する利用者は、サーバーに `with_none_endpoint(true)` を足す。
 - サーバーはクライアントの証明書を全部は信頼せず、`pki_dir` の信頼の一覧で判断する（試験は `with_trust_all_client_certificates(true)`）。`pki_dir` を設定しなければ、一覧も起動ごとに空になる。
 - サーバーの鍵と証明書は async-opcua ではなく `banto-opcua-pki` が用意し、SubjectAltName に公開ホストと bind したアドレスを載せる。既存の証明書が ApplicationUri・公開ホスト・有効期間と合わなければ作り直す（拇印が変わる）。生成に失敗したときの `Error::Pki` の `io::ErrorKind` は、失敗の理由のものになる。

@@ -195,7 +195,8 @@ pub struct ClientConfig {
     pub application_uri: String,
     /// 知らないサーバーの証明書も信頼の一覧へ入れて接続する。試験用で、既定は入れない。
     ///
-    /// 有効期間・ホスト名・ApplicationUri の検査は続ける。
+    /// 有効期間・ホスト名・ApplicationUri の検査は続ける。本番の信頼の一覧を書き換えない
+    /// よう、[`Self::pki_dir`] と一緒には使えない（一覧は接続ごとの一時ディレクトリに置く）。
     pub trust_all_server_certificates: bool,
 }
 
@@ -342,6 +343,12 @@ impl ClientConfig {
                     .to_owned(),
             );
         }
+        if self.trust_all_server_certificates && self.pki_dir.is_some() {
+            return Err(
+                "trust_all_server_certificates は試験用です。pki_dir の信頼の一覧を書き換えないよう、pki_dir と一緒には使えません"
+                    .to_owned(),
+            );
+        }
         if secure && self.pki_dir.is_none() && !self.trust_all_server_certificates {
             return Err(
                 "暗号化した接続には、サーバーの証明書の信頼の一覧を残す pki_dir が要ります"
@@ -463,6 +470,9 @@ mod tests {
                 .with_security(SecurityPolicy::None, MessageSecurityMode::Sign),
             config.clone().with_user_name("operator", "secret"),
             secure(config.clone()),
+            secure(config.clone())
+                .with_pki_dir("pki")
+                .with_trust_all_server_certificates(true),
         ] {
             assert!(invalid.validate().is_err(), "{invalid:?}");
         }
