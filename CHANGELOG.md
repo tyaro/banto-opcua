@@ -9,6 +9,11 @@
 
 利用者が取り込む crate の中身は 0.3.0 と同じ。v0.3.0 のタグを付けた後にマージした CI の更新を含める。
 
+**この版はタグ `v0.3.2` で配る。** タグ `v0.3.1` は、この節を足した #62 のマージより前のコミット
+（#53 のマージ `94d0ebf`）に付いてしまい、中身は `version = "0.3.0"` のまま。タグは付け直さずに
+残し、0.3.1 の中身（`version = "0.3.1"`、#62 のマージ `4115cd3`）にはタグ `v0.3.2` を付けた。
+取り込む側は `tag = "v0.3.2"` を使う。次に版を上げるときは 0.3.3 にして、タグ名と版をそろえ直す。
+
 ### 変更
 
 - CI で使う `taiki-e/install-action` を 2.89.1 から 2.90.5 に上げた（#53）。
@@ -137,8 +142,8 @@ ADR-0004 の書き込みハンドラーに通す Write を含む。
 - 自由関数 `endpoint_url` を公開 API から外した。`ServerConfig::endpoint_url` を使う。
 - `RunningServer::namespace_index()` を追加。`Error::TagUpdate` の表示文言をタグ操作全般に合わせた。
 
-[Unreleased]: https://github.com/tyaro/banto-opcua/compare/v0.3.1...HEAD
-[0.3.1]: https://github.com/tyaro/banto-opcua/compare/v0.3.0...v0.3.1
+[Unreleased]: https://github.com/tyaro/banto-opcua/compare/v0.3.2...HEAD
+[0.3.1]: https://github.com/tyaro/banto-opcua/compare/v0.3.0...v0.3.2
 [0.3.0]: https://github.com/tyaro/banto-opcua/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/tyaro/banto-opcua/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/tyaro/banto-opcua/releases/tag/v0.1.0
