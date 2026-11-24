@@ -10,17 +10,20 @@ use opcua::{
         address_space::{AccessLevel, ObjectBuilder, Variable},
     },
     types::{
-        AttributeId, ByteString, DataValue, DateTime, Identifier, NodeId, ObjectId, QualifiedName,
-        ReferenceTypeId, StatusCode, TimestampsToReturn, VariableTypeId, Variant,
+        AttributeId, ByteString, DataEncoding, DataValue, DateTime, Identifier, NodeId,
+        NumericRange, ObjectId, QualifiedName, ReferenceTypeId, StatusCode, TimestampsToReturn,
+        VariableTypeId, Variant,
     },
 };
 
-use banto_opcua_core::DataType;
+use banto_opcua_core::{DataType, TagMetadata};
 
-use opcua::server::address_space::NodeType;
+use opcua::server::address_space::{NodeBase, NodeType};
 
 use crate::{
-    Error, reading,
+    Error, TagReading,
+    metadata::{self, Property},
+    reading,
     tag_manager::{self, TagName, TagNodeManager, WritePath},
 };
 
@@ -41,9 +44,11 @@ pub(crate) struct FixedTags {
     pub(crate) manager: Arc<TagNodeManager>,
 }
 
-struct InitialTagValue {
+struct InitialTagValue<'a> {
     placeholder: Variant,
     data_value: DataValue,
+    metadata: &'a TagMetadata,
+    data_type: Option<DataType>,
 }
 
 impl FixedTags {
@@ -150,6 +155,8 @@ impl FixedTags {
             InitialTagValue {
                 placeholder: value.clone(),
                 data_value: DataValue::new_now(value),
+                metadata: &TagMetadata::default(),
+                data_type: None,
             },
             after_insert,
         )
@@ -161,9 +168,14 @@ impl FixedTags {
         connection: &str,
         group: &str,
         tag: &str,
-        data_type: DataType,
-        value: DataValue,
+        reading: TagReading,
+        metadata: &TagMetadata,
     ) -> Result<(), Error> {
+        let data_type = reading.data_type;
+        let value = reading.data_value();
+        metadata
+            .validate(data_type)
+            .map_err(|error| Error::TagUpdate(error.to_string()))?;
         let placeholder = reading::placeholder(data_type);
         self.add_tag_data_value_with(
             handle,
@@ -173,6 +185,8 @@ impl FixedTags {
             InitialTagValue {
                 placeholder,
                 data_value: value,
+                metadata,
+                data_type: Some(data_type),
             },
             || {},
         )
@@ -221,15 +235,61 @@ impl FixedTags {
             initial.placeholder,
         );
         variable.set_data_value(initial.data_value);
+        variable.set_description(metadata::description(initial.metadata));
+        let variable_type = initial
+            .data_type
+            .map_or(VariableTypeId::BaseDataVariableType, |data_type| {
+                metadata::variable_type_id(initial.metadata.shape(data_type).variable_type)
+            });
+        let properties: Vec<_> = Property::ALL
+            .into_iter()
+            .filter_map(|property| Some((property, property.value(initial.metadata)?)))
+            .map(|(property, value)| {
+                let id =
+                    metadata::property_id(self.namespace_index, connection, group, tag, property);
+                (id, property, value)
+            })
+            .collect();
+        if properties.iter().any(|(id, _, _)| space.node_exists(id)) {
+            return Err(Error::TagUpdate(format!(
+                "タグ {tag_id} のプロパティが残っています"
+            )));
+        }
         if !space.insert::<_, NodeId>(variable, None) {
             return Err(Error::TagUpdate(format!("タグ {tag_id} を登録できません")));
         }
         space.insert_reference(&group_id, &tag_id, ReferenceTypeId::HasComponent);
         space.insert_reference(
             &tag_id,
-            &VariableTypeId::BaseDataVariableType.into(),
+            &variable_type.into(),
             ReferenceTypeId::HasTypeDefinition,
         );
+        let added: Vec<_> = std::iter::once(tag_id.clone())
+            .chain(properties.iter().map(|(id, _, _)| id.clone()))
+            .collect();
+        for (id, property, value) in properties {
+            let mut node = Variable::new_data_value(
+                &id,
+                QualifiedName::new(0, property.browse_name()),
+                property.browse_name(),
+                property.data_type(),
+                None,
+                None,
+                value,
+            );
+            // 値は親の意味を決め、書き換わりうる（OPC 10000-3 5.6.2）。
+            let level = AccessLevel::CURRENT_READ | AccessLevel::SEMANTIC_CHANGE;
+            node.set_access_level(level);
+            node.set_user_access_level(level);
+            // 直前に存在しないことを確かめたので失敗しない。
+            space.insert::<_, NodeId>(node, None);
+            space.insert_reference(&tag_id, &id, ReferenceTypeId::HasProperty);
+            space.insert_reference(
+                &id,
+                &VariableTypeId::PropertyType.into(),
+                ReferenceTypeId::HasTypeDefinition,
+            );
+        }
         self.manager.inner().tags().write().insert(
             tag_id.clone(),
             TagName {
@@ -240,9 +300,10 @@ impl FixedTags {
         );
         after_insert();
         // 初期値の保存と通知まで write ロックで排他し、削除・再登録との逆転を防ぐ。
-        // 通常の値更新と同じ sampler で監視項目ごとにノードを読み直す。
+        // 通常の値更新と同じ sampler で監視項目ごとにノードを読み直す。プロパティも
+        // 通知し、削除で Bad になった購読を同じ監視項目のまま戻す。
         handle.subscriptions().maybe_notify(
-            [(&tag_id, AttributeId::Value)].into_iter(),
+            added.iter().map(|node| (node, AttributeId::Value)),
             |id, attribute, range, encoding| {
                 space.find(id)?.as_node().get_attribute(
                     TimestampsToReturn::Both,
@@ -297,6 +358,103 @@ impl FixedTags {
         Ok(())
     }
 
+    /// 登録済みタグの Description とプロパティの値を書き換え、購読者へ通知する。
+    /// ノードの形（型定義と持つプロパティ）が変わるなら書き換えずにエラーにする。
+    pub fn update_tag_metadata(
+        &self,
+        handle: &ServerHandle,
+        connection: &str,
+        group: &str,
+        tag: &str,
+        metadata: &TagMetadata,
+    ) -> Result<(), Error> {
+        validate_path(connection, group, tag)?;
+        let id = NodeId::new(self.namespace_index, format!("{connection}.{group}.{tag}"));
+        let group_id = folder_id(self.namespace_index, &[connection, group]);
+        let mut space = self.manager.address_space().write();
+        // サンプルタグは外部名を持たないので、属性を付けられない。
+        if !space.has_reference(&group_id, &id, ReferenceTypeId::HasComponent)
+            || !self.manager.inner().tags().read().contains_key(&id)
+        {
+            return Err(Error::TagUpdate(format!(
+                "タグ {id} は指定されたグループにありません"
+            )));
+        }
+        let Some(NodeType::Variable(variable)) = space.find(&id) else {
+            return Err(Error::TagUpdate(format!("タグ {id} が見つかりません")));
+        };
+        let data_type = reading::data_type_from_id(&variable.data_type()).ok_or_else(|| {
+            Error::TagUpdate(format!("タグ {id} の DataType は属性を付けられません"))
+        })?;
+        metadata
+            .validate(data_type)
+            .map_err(|error| Error::TagUpdate(error.to_string()))?;
+        let shape = metadata.shape(data_type);
+        let property_ids = Property::ALL.map(|property| {
+            (
+                property,
+                metadata::property_id(self.namespace_index, connection, group, tag, property),
+            )
+        });
+        let same_shape = space.has_reference(
+            &id,
+            &metadata::variable_type_id(shape.variable_type).into(),
+            ReferenceTypeId::HasTypeDefinition,
+        ) && property_ids
+            .iter()
+            .all(|(property, node)| space.node_exists(node) == property.in_shape(shape));
+        if !same_shape {
+            return Err(Error::MetadataShapeChanged(id.to_string()));
+        }
+        if let Some(NodeType::Variable(variable)) = space.find_mut(&id) {
+            variable.set_description(metadata::description(metadata));
+        }
+        let mut changed = vec![(id.clone(), AttributeId::Description)];
+        let mut semantics_changed = false;
+        for (property, node) in &property_ids {
+            let (Some(value), Some(NodeType::Variable(variable))) =
+                (property.value(metadata), space.find_mut(node))
+            else {
+                continue;
+            };
+            if current_value(variable).value.as_ref() == Some(&value) {
+                continue;
+            }
+            semantics_changed = true;
+            variable.set_data_value(DataValue::new_now(value));
+            changed.push((node.clone(), AttributeId::Value));
+        }
+        handle.subscriptions().maybe_notify(
+            changed.iter().map(|(node, attribute)| (node, *attribute)),
+            |id, attribute, range, encoding| {
+                space.find(id)?.as_node().get_attribute(
+                    TimestampsToReturn::Both,
+                    attribute,
+                    range,
+                    encoding,
+                )
+            },
+        );
+        // 単位・レンジ・文言が変わったら、値の購読者へ SemanticsChanged を立てた通知を
+        // 1 件ずつ送る（OPC 10000-8 5.2、OPC 10000-4 7.38.1）。保存した値には立てない
+        // ので、通常の Read には出ない。値・品質・時刻はそのまま。
+        if semantics_changed && let Some(NodeType::Variable(variable)) = space.find(&id) {
+            let mut value = current_value(variable);
+            value.status = Some(
+                value
+                    .status
+                    .unwrap_or(StatusCode::Good)
+                    .set_semantics_changed(true),
+            );
+            handle.subscriptions().notify_data_change(std::iter::once((
+                value,
+                &id,
+                AttributeId::Value,
+            )));
+        }
+        Ok(())
+    }
+
     /// 削除通知を流してからアドレス空間から外す。MonitoredItem は保持する。
     pub fn remove_tag(
         &self,
@@ -317,20 +475,28 @@ impl FixedTags {
             )));
         }
         let now = DateTime::now();
+        let properties: Vec<_> = Property::ALL
+            .into_iter()
+            .map(|property| {
+                metadata::property_id(self.namespace_index, connection, group, tag, property)
+            })
+            .filter(|property| space.node_exists(property))
+            .collect();
+        let removed = DataValue {
+            value: None,
+            status: Some(StatusCode::BadNodeIdUnknown),
+            source_timestamp: Some(now),
+            server_timestamp: Some(now),
+            ..Default::default()
+        };
         handle.subscriptions().notify_data_change(
-            [(
-                DataValue {
-                    value: None,
-                    status: Some(StatusCode::BadNodeIdUnknown),
-                    source_timestamp: Some(now),
-                    server_timestamp: Some(now),
-                    ..Default::default()
-                },
-                &id,
-                AttributeId::Value,
-            )]
-            .into_iter(),
+            std::iter::once(&id)
+                .chain(&properties)
+                .map(|node| (removed.clone(), node, AttributeId::Value)),
         );
+        for property in &properties {
+            space.delete(property, true);
+        }
         space.delete(&id, true);
         self.manager.inner().tags().write().remove(&id);
         Ok(())
@@ -402,4 +568,14 @@ fn folder_id(namespace: u16, parts: &[&str]) -> NodeId {
         namespace,
         identifier: Identifier::ByteString(ByteString { value: Some(bytes) }),
     }
+}
+
+/// 変数の保存済みの DataValue（値・StatusCode・時刻）。
+fn current_value(variable: &Variable) -> DataValue {
+    variable.value(
+        TimestampsToReturn::Both,
+        &NumericRange::None,
+        &DataEncoding::Binary,
+        0.0,
+    )
 }

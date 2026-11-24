@@ -46,6 +46,14 @@ push できなかったため、PR のブランチとは別のブランチに置
 作った新しい購読に残って通知を捨てる不具合を直すコミットを重ね（ADR-0006）、
 `9daa957a0ccf425bcb61bc488e828ccf2495c302` に固定を移した（オーナー決定）。このコミットは fork の保全用ブランチ
 `keep/banto-upstream-20261105` で保持する。購読への影響は ADR-0006 の 2026-11-05 の追記。
+2026-11-24、上流の master（`ca18bb73`）の上に fork の 4 コミットを載せ直し、キューがあふれても
+SemanticsChanged を次の通知へ引き継ぐ修正（ADR-0008、[#59](https://github.com/tyaro/banto-opcua/issues/59)）を
+重ねて、`c0de87ba66178e66e4b3a4ea95f4845e375b04fb` に固定を移した（オーナー決定。上流へは出さない）。
+引き継ぎは、キューがあふれたときに加えて、採取の間隔で保留した値が次の値に置き換わったときと、
+キューを縮めたときにも行う。ビット付きの値は、値と StatusCode が前の通知と同じでも DataChangeFilter で落とさない。キューを縮めるときは、上流が逆にしていた破棄の向きを Part 4 5.13.3.2 どおり（discard_oldest なら古い方）に直し、ビットは残った通知に付ける。
+このコミットは fork の保全用ブランチ `keep/banto-upstream-20261124` で保持する。上流の master では
+暗号まわりの依存が上がり（`rsa` 0.10 など）、キューがあふれたときの overflow のビットの付け方も
+Part 4 5.13.1.5 に合わせて直っている。
 sampling interval が -1 のときは実際の購読周期まで最新値だけを保留する。
 これらの修正を含む公開版が出たら crates.io 依存へ戻す（[#17](https://github.com/tyaro/banto-opcua/issues/17)）。
 基点の upstream コミットには 0.19.0 以降の別の変更も含まれるため、依存更新時は
@@ -136,6 +144,6 @@ open62541 とその Rust バインディングも MPL-2.0 である。ライセ�
 - MPL のソースをこのリポジトリへコピーしない。upstream を直すときは upstream へ返すか、MPL のままのパッチとして分離する。
 - `deny.toml` の許可ライセンスは、実測した依存木に現れたものだけにする。MPL-2.0 はその実測に含まれる。新しいコピーレフトを足すときはこの ADR を見直す。
 - Phase 3 でセキュリティポリシーを開くときは、非推奨の Basic128Rsa15 と Basic256 を既定にしない。
-- `async-opcua-crypto` が依存する `rsa` 0.9.10 には RUSTSEC-2023-0071（Marvin Attack。RSA 秘密操作のタイミングサイドチャネル）がある。advisory は 2026-09-12 時点で修正版が無いと書いている。Phase 1 のエンドポイントは SecurityPolicy `None` で、RSA の秘密操作はしない。`deny.toml` はこの advisory を無視する。見直し期日は 2027-01-15、または Phase 3（証明書と SecurityPolicy）に着手するときのいずれか早い方。無視を外せる版が出たら依存を上げ、`deny.toml` の ignore とこの項目を消す。README と `deny.toml` は理由を繰り返さず、この項目を参照する。
+- `async-opcua-crypto` が依存する `rsa` 0.9.10 には RUSTSEC-2023-0071（Marvin Attack。RSA 秘密操作のタイミングサイドチャネル）がある。advisory は 2026-09-12 時点で修正版が無いと書いている。Phase 1 のエンドポイントは SecurityPolicy `None` で、RSA の秘密操作はしない。`deny.toml` はこの advisory を無視する。見直し期日は 2027-01-15、または Phase 3（証明書と SecurityPolicy）に着手するときのいずれか早い方。無視を外せる版が出たら依存を上げ、`deny.toml` の ignore とこの項目を消す。README と `deny.toml` は理由を繰り返さず、この項目を参照する。2026-11-24 の固定の移動で `rsa` は 0.10.0 になり、cargo deny 0.22.0 の実測でこの advisory に当たらなくなったので、`deny.toml` の ignore と README の注意を外した。
 - banto-industrial が git 依存で本クレートを取るときは、ハブのバイナリに MPL のコードが含まれることをリリースノートか依存の説明に残す。
 - タグのアドレス空間はこの ADR の範囲外。NodeId、DataType、品質、時刻、ポート、LAN 公開は 2026-10-15 に決定し、README の「決定事項」に記載した。

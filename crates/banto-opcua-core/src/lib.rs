@@ -12,6 +12,7 @@
 //! 購読と品質だけの変化通知は server で扱う。非有限値の判定は core に置く。
 
 mod address;
+mod metadata;
 mod node;
 mod quality;
 mod scalar;
@@ -20,6 +21,10 @@ mod value;
 mod write;
 
 pub use address::{NamespaceRef, NodeAddress, NodeAddressError, UnsupportedIdentifierType};
+pub use metadata::{
+    EngineeringUnits, EuRange, MetadataError, MetadataShape, TagMetadata, TwoStateLabels,
+    UNECE_UNITS_NAMESPACE_URI, VariableType,
+};
 pub use node::{AccessLevel, Identifier, NodeClass, NodeId, VariableNode};
 pub use quality::{Quality, StatusCode, status_code_for_quality};
 pub use scalar::{NotPublishable, ScalarType, ScalarValue};

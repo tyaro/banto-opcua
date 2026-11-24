@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 数値と文字列のタグを元の型のまま公開する（ADR-0007、#56）。公開 API に互換でない変更がある。
+タグの説明・単位・レンジ・二値の文言を、変数ノードの Description と標準のプロパティで公開する（ADR-0008、#55）。
 
 ### 追加
 
@@ -14,9 +15,17 @@
 - core の `MappedValue::from_number`（f64 から丸めずに変える）、`MappedValue::data_type`、`MappedValue::is_publishable_as`、`map_typed_value`、`MAX_STRING_BYTES`（4096）、`MappedValue` の `Display`。
 - core の `From<MappedValue> for ScalarValue` と `TryFrom<ScalarValue> for MappedValue`（SByte と Byte は `NotPublishable`）。
 - サーバーの `TagReading::typed`。64 ビットの整数や String を f64 を経由せずに渡す。
+- core の `TagMetadata`（`EngineeringUnits`・`EuRange`・`TwoStateLabels`）、`MetadataShape`・`VariableType`・`MetadataError`、`UNECE_UNITS_NAMESPACE_URI`。`EngineeringUnits::unit_id` は UNECE の Common Code から OPC 10000-8 の UnitId を作る。
+- サーバーの `RunningServer::add_tag_reading_with_metadata` と `update_tag_metadata`。説明は Description 属性に、単位・レンジ・文言は EngineeringUnits・EURange・TrueState・FalseState のプロパティにする。型定義は、EURange があれば AnalogItemType、単位だけなら BaseAnalogType、文言のある Boolean は TwoStateDiscreteType、ほかは BaseDataVariableType。
+- `update_tag_metadata` は、ノードの形（型定義と持つプロパティ）が同じなら同じ NodeId のまま書き換えて購読者へ通知する。単位・レンジ・文言の値が変わったら、タグ本体の Value の監視項目ごとに SemanticsChanged を立てた通知を 1 件送る（保存した値には立てず、通常の Read には出ない）。形が変わるなら `Error::MetadataShapeChanged`（新しい変種）にし、何も変えない。意味を決めるプロパティの AccessLevel には SemanticChange を付ける。
+- タグを登録し直したとき、作り直したプロパティの購読者へも通知し、同じ監視項目のまま Good に戻す。
+- `remove_tag` はプロパティも消し、プロパティの購読者へも `BadNodeIdUnknown` を通知する。
+- クライアントの `ConnectedClient::read_metadata` と `NodeMetadata`。ノードの並びの Description と EngineeringUnits・EURange・TrueState・FalseState のプロパティを読み、`TagMetadata` で返す（型定義は問わない）。Description を持たないノード（`BadAttributeIdInvalid`）からも単位・レンジを読む。Read と TranslateBrowsePathsToNodeIds は `read_batch` と同じ規則で分けて送る。
+- core の StatusCode に `BAD_NODE_ID_INVALID` / `BAD_ATTRIBUTE_ID_INVALID`。
 
 ### 変更
 
+- async-opcua の固定を、fork の 4 コミットを上流の master（`ca18bb73`）に載せ直し、キューがあふれたり、保留した値が置き換わったりしても SemanticsChanged を次の通知へ引き継ぐ修正を重ねた `c0de87b` へ移した（ADR-0001、#59）。上流の暗号まわりの依存の更新で `rsa` は 0.10.0 になり、RUSTSEC-2023-0071 の ignore と、使われなくなった BSD-2-Clause・BSD-3-Clause の許可を `deny.toml` から外した。
 - `publish_decision` と `PublishDecision` を廃止した。`publish_data_type` に置き換える。`string` のタグも String で公開する。
 - `TagReading::value` を `Option<f64>` から `Option<MappedValue>` にした。`TagReading::new` は `Option<f64>` を受けたまま `from_number` で変える（`const fn` ではなくなった）。
 - `MappedValue`・`MappedReading`・`TagReading` は `Copy` ではなくなった（String を持つため）。

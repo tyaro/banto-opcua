@@ -11,6 +11,7 @@ mod client;
 mod config;
 mod convert;
 mod error;
+mod metadata;
 mod subscribe;
 mod write;
 
@@ -18,13 +19,14 @@ pub use client::{ConnectedClient, OpcUaClient};
 pub use config::{ClientConfig, ReconnectPolicy, SubscriptionSettings};
 pub use convert::NodeReading;
 pub use error::Error;
+pub use metadata::NodeMetadata;
 pub use write::{WriteFailure, WriteOutcome};
 
 /// 読み取り結果を解釈するときの共有語彙。
 pub mod model {
     #[doc(inline)]
     pub use banto_opcua_core::{
-        NamespaceRef, NodeAddress, NodeAddressError, NodeId, Quality, ScalarType, ScalarValue,
-        StatusCode,
+        EngineeringUnits, EuRange, NamespaceRef, NodeAddress, NodeAddressError, NodeId, Quality,
+        ScalarType, ScalarValue, StatusCode, TagMetadata, TwoStateLabels,
     };
 }

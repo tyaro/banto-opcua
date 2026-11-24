@@ -18,6 +18,7 @@
 mod config;
 mod error;
 mod fixed_tags;
+mod metadata;
 mod reading;
 mod server;
 mod tag_manager;
@@ -33,9 +34,11 @@ pub use write::{WriteFuture, WriteHandler};
 pub mod model {
     #[doc(inline)]
     pub use banto_opcua_core::{
-        AccessLevel, DataType, Identifier, MAX_STRING_BYTES, MappedReading, MappedValue, NodeClass,
-        NodeId, Quality, SampleTimestamps, StatusCode, TagType, ValueScaling, VariableNode,
-        WriteClient, WritePrincipal, WriteRejection, WriteRequest, publish_data_type,
+        AccessLevel, DataType, EngineeringUnits, EuRange, Identifier, MAX_STRING_BYTES,
+        MappedReading, MappedValue, MetadataError, MetadataShape, NodeClass, NodeId, Quality,
+        SampleTimestamps, StatusCode, TagMetadata, TagType, TwoStateLabels,
+        UNECE_UNITS_NAMESPACE_URI, ValueScaling, VariableNode, VariableType, WriteClient,
+        WritePrincipal, WriteRejection, WriteRequest, publish_data_type,
         status_code_for_write_rejection,
     };
 }
@@ -94,6 +97,14 @@ mod tests {
         assert_eq!(
             Core::BAD_TOO_MANY_OPERATIONS.code(),
             Ua::BadTooManyOperations.bits()
+        );
+        assert_eq!(
+            Core::BAD_NODE_ID_INVALID.code(),
+            Ua::BadNodeIdInvalid.bits()
+        );
+        assert_eq!(
+            Core::BAD_ATTRIBUTE_ID_INVALID.code(),
+            Ua::BadAttributeIdInvalid.bits()
         );
     }
 }

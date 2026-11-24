@@ -18,8 +18,9 @@ use opcua::{
     },
     crypto::SecurityPolicy,
     types::{
-        AttributeId, DataValue, ExtensionObject, MessageSecurityMode, MonitoredItemCreateRequest,
-        MonitoringMode, MonitoringParameters, NodeId as UaNodeId, ReadValueId,
+        AttributeId, BrowsePath, DataValue, ExtensionObject, MessageSecurityMode,
+        MonitoredItemCreateRequest, MonitoringMode, MonitoringParameters, NodeId as UaNodeId,
+        QualifiedName, ReadValueId, ReferenceTypeId, RelativePath, RelativePathElement,
         StatusCode as UaStatusCode, TimestampsToReturn, UserTokenPolicy, VariableId, Variant,
         WriteRequest, WriteValue,
     },
@@ -30,6 +31,7 @@ use crate::{
     ClientConfig, Error, NodeReading, ReconnectPolicy, WriteFailure, WriteOutcome,
     chunk::{ChunkFailure, send_in_chunks},
     convert::{core_status_code, ua_node_id, variant_from_scalar},
+    metadata::{self, NodeMetadata, Property},
     subscribe::{PublishSignals, Slot, Table},
     write::{ChunkWriteFailure, classify_response, error_of, outcomes_of},
 };
@@ -440,6 +442,62 @@ impl ConnectedClient {
         Ok(Arc::clone(&info))
     }
 
+    /// `items` を `limit` 件ずつ `service` で送り、結果を要求の順に返す（Read と同じ規則）。
+    ///
+    /// `BadTooManyOperations` では塊を半分にして送り直し、小さくした大きさを `limit` に
+    /// 残す。塊を送る前か応答の後に接続が張り直されていたら [`Error::Disconnected`]、
+    /// ほかの失敗は [`Error::Read`]。
+    async fn call_chunked<T, R, F, Fut>(
+        &self,
+        generation: u64,
+        items: &[T],
+        limit: &AtomicUsize,
+        service: F,
+    ) -> Result<Vec<R>, Error>
+    where
+        T: Clone,
+        F: Fn(Vec<T>) -> Fut,
+        Fut: std::future::Future<Output = Result<Vec<R>, opcua::types::Error>>,
+    {
+        let mut chunk_size = limit.load(Ordering::Relaxed);
+        let result = send_in_chunks(
+            items,
+            &mut chunk_size,
+            |failure| matches!(failure, ReadFailure::Service(error) if is_too_many_operations(error)),
+            |chunk| {
+                let sent = service(chunk);
+                async move {
+                    if !self.on_connection(generation) {
+                        return Err(ReadFailure::Reconnected);
+                    }
+                    let values = sent.await.map_err(ReadFailure::Service)?;
+                    if !self.on_connection(generation) {
+                        return Err(ReadFailure::Reconnected);
+                    }
+                    Ok(values)
+                }
+            },
+        )
+        .await;
+        limit.store(chunk_size, Ordering::Relaxed);
+        result.map_err(|err| match err.failure {
+            ChunkFailure::Request {
+                error: ReadFailure::Reconnected,
+                ..
+            } => Error::Disconnected,
+            ChunkFailure::Request {
+                error: ReadFailure::Service(error),
+                chunk_len,
+            } => Error::Read(describe_failure(ChunkFailure::Request { error, chunk_len })),
+            ChunkFailure::CountMismatch { expected, actual } => {
+                Error::Read(describe_failure(ChunkFailure::CountMismatch {
+                    expected,
+                    actual,
+                }))
+            }
+        })
+    }
+
     /// ノードの並びの Value 属性をまとめて読み、ノードごとの結果を要求の順に返す。
     ///
     /// - `TimestampsToReturn` は `Source`、`maxAge` は 0（機器から読み直す）。
@@ -478,44 +536,18 @@ impl ConnectedClient {
         }
 
         let generation = info.generation;
-        let mut chunk_size = info.max_nodes_per_read.load(Ordering::Relaxed);
-        let result = send_in_chunks(
-            &requests,
-            &mut chunk_size,
-            |failure| matches!(failure, ReadFailure::Service(error) if is_too_many_operations(error)),
-            |chunk| async move {
-                if !self.on_connection(generation) {
-                    return Err(ReadFailure::Reconnected);
-                }
-                let values = self
-                    .session
-                    .read(&chunk, TimestampsToReturn::Source, 0.0)
-                    .await
-                    .map_err(ReadFailure::Service)?;
-                if !self.on_connection(generation) {
-                    return Err(ReadFailure::Reconnected);
-                }
-                Ok(values)
-            },
-        )
-        .await;
-        info.max_nodes_per_read.store(chunk_size, Ordering::Relaxed);
-        let values = result.map_err(|err| match err.failure {
-            ChunkFailure::Request {
-                error: ReadFailure::Reconnected,
-                ..
-            } => Error::Disconnected,
-            ChunkFailure::Request {
-                error: ReadFailure::Service(error),
-                chunk_len,
-            } => Error::Read(describe_failure(ChunkFailure::Request { error, chunk_len })),
-            ChunkFailure::CountMismatch { expected, actual } => {
-                Error::Read(describe_failure(ChunkFailure::CountMismatch {
-                    expected,
-                    actual,
-                }))
-            }
-        })?;
+        let values = self
+            .call_chunked(
+                generation,
+                &requests,
+                &info.max_nodes_per_read,
+                |chunk| async move {
+                    self.session
+                        .read(&chunk, TimestampsToReturn::Source, 0.0)
+                        .await
+                },
+            )
+            .await?;
         // 要求を 1 つも送らなかった（全ノードの URI が解決できなかった）ときも、
         // 解決に使った NamespaceArray がまだその接続のものかを確かめる。
         if !self.on_connection(generation) {
@@ -525,6 +557,141 @@ impl ConnectedClient {
             readings[position] = Some(NodeReading::from_data_value(value));
         }
         Ok(readings.into_iter().flatten().collect())
+    }
+
+    /// ノードの並びの説明・単位・レンジ・二値の文言（ADR-0008）を読み、ノードごとの結果を
+    /// 要求の順に返す。他社のサーバーの単位を取り込むときに使う。
+    ///
+    /// - 説明は Description 属性、単位・レンジ・文言は名前空間 0 の BrowseName
+    ///   （`EngineeringUnits`・`EURange`・`TrueState`・`FalseState`）のプロパティ
+    ///   （HasProperty とその下位の参照）から読む。型定義は問わない。
+    /// - Description は任意の属性なので、`BadAttributeIdInvalid` は説明が無いだけとして
+    ///   Good にし、プロパティは読む。ノードが無い（`BadNodeIdUnknown`・
+    ///   `BadNodeIdInvalid`）ときだけ、その StatusCode と空の属性にしてプロパティを辿らない。
+    ///   ほかの理由で Description を読めなかったとき（アクセス拒否など）は、その
+    ///   StatusCode を返しつつプロパティは読む。
+    /// - 無いプロパティ、読めなかったプロパティ、型の違う値は、その属性を `None` にする。
+    /// - Read と TranslateBrowsePathsToNodeIds を、[`Self::read_batch`] と同じ規則で
+    ///   分けて送る。切断・時間切れ・サービス全体のエラーは `Err`。
+    pub async fn read_metadata(&self, nodes: &[NodeAddress]) -> Result<Vec<NodeMetadata>, Error> {
+        if nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let info = self.server_info().await?;
+        let generation = info.generation;
+        let mut results = vec![NodeMetadata::without_metadata(StatusCode::GOOD); nodes.len()];
+        let mut resolved = Vec::with_capacity(nodes.len());
+        for (position, address) in nodes.iter().enumerate() {
+            match address.resolve(&info.namespace_array) {
+                Some(node_id) => resolved.push((position, ua_node_id(&node_id))),
+                None => {
+                    results[position] =
+                        NodeMetadata::without_metadata(StatusCode::BAD_NODE_ID_UNKNOWN);
+                }
+            }
+        }
+
+        let requests: Vec<_> = resolved
+            .iter()
+            .map(|(_, node_id)| ReadValueId {
+                node_id: node_id.clone(),
+                attribute_id: AttributeId::Description as u32,
+                ..Default::default()
+            })
+            .collect();
+        let descriptions = self
+            .call_chunked(
+                generation,
+                &requests,
+                &info.max_nodes_per_read,
+                |chunk| async move {
+                    self.session
+                        .read(&chunk, TimestampsToReturn::Neither, 0.0)
+                        .await
+                },
+            )
+            .await?;
+        let mut paths = Vec::new();
+        let mut owners = Vec::new();
+        for ((position, node_id), value) in resolved.iter().zip(descriptions) {
+            let status = value.status.map_or(StatusCode::GOOD, core_status_code);
+            let (status, read_properties) = metadata::description_outcome(status);
+            results[*position].status = status;
+            if !read_properties {
+                continue;
+            }
+            if status.is_good() {
+                results[*position].metadata.description = metadata::description(&value);
+            }
+            for property in Property::ALL {
+                owners.push((*position, property));
+                paths.push(BrowsePath {
+                    starting_node: node_id.clone(),
+                    relative_path: RelativePath {
+                        elements: Some(vec![RelativePathElement {
+                            reference_type_id: ReferenceTypeId::HasProperty.into(),
+                            is_inverse: false,
+                            include_subtypes: true,
+                            target_name: QualifiedName::new(0, property.browse_name()),
+                        }]),
+                    },
+                });
+            }
+        }
+
+        // TranslateBrowsePaths の上限は読んでいないので、Read の上限から始めて
+        // BadTooManyOperations で小さくする。Read の上限は小さくしない。
+        let translate_limit = AtomicUsize::new(info.max_nodes_per_read.load(Ordering::Relaxed));
+        let translated = self
+            .call_chunked(generation, &paths, &translate_limit, |chunk| async move {
+                self.session
+                    .translate_browse_paths_to_node_ids(&chunk)
+                    .await
+            })
+            .await?;
+        let mut found = Vec::new();
+        let mut reads = Vec::new();
+        for (owner, result) in owners.into_iter().zip(translated) {
+            if !result.status_code.is_good() {
+                continue;
+            }
+            let target = result.targets.iter().flatten().find(|target| {
+                target.remaining_path_index == u32::MAX
+                    && target.target_id.server_index == 0
+                    && target.target_id.namespace_uri.is_null()
+            });
+            if let Some(target) = target {
+                found.push(owner);
+                reads.push(ReadValueId {
+                    node_id: target.target_id.node_id.clone(),
+                    attribute_id: AttributeId::Value as u32,
+                    ..Default::default()
+                });
+            }
+        }
+        let values = self
+            .call_chunked(
+                generation,
+                &reads,
+                &info.max_nodes_per_read,
+                |chunk| async move {
+                    self.session
+                        .read(&chunk, TimestampsToReturn::Neither, 0.0)
+                        .await
+                },
+            )
+            .await?;
+        if !self.on_connection(generation) {
+            return Err(Error::Disconnected);
+        }
+        let mut by_node: Vec<Vec<(Property, DataValue)>> = vec![Vec::new(); nodes.len()];
+        for ((position, property), value) in found.into_iter().zip(values) {
+            by_node[position].push((property, value));
+        }
+        for (result, values) in results.iter_mut().zip(by_node) {
+            metadata::apply(&mut result.metadata, values);
+        }
+        Ok(results)
     }
 
     /// ノードと値の並びを Value 属性へまとめて書き、ノードごとの StatusCode を要求の順に返す。

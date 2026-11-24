@@ -42,6 +42,10 @@ Read と 0 ms / 非ゼロの sampling interval の購読で、入力した Sourc
 遅延したサンプルの時刻を保持する async-opcua の修正は、MPL-2.0 の
 [別リポジトリ](https://github.com/tyaro/async-opcua/pull/1)で公開している。
 この境界の理由は [ADR-0002](docs/adr/0002-dynamic-reading-boundary.md) に記す。
+`add_tag_reading_with_metadata` / `update_tag_metadata` は、タグの説明・単位・レンジ・
+二値の文言（`TagMetadata`）を、Description 属性と標準のプロパティ（EngineeringUnits・
+EURange・TrueState・FalseState）で公開する。型定義は AnalogItemType などから属性に応じて選ぶ
+（[ADR-0008](docs/adr/0008-tag-metadata-properties.md)）。
 `ServerConfig::with_pki_dir` を指定すると、自己署名の鍵と証明書を初回だけ作り、
 以降の起動で再利用する。未指定なら起動ごとに一時ディレクトリへ作る
 （[ADR-0003](docs/adr/0003-persistent-pki-dir.md)）。
@@ -73,7 +77,7 @@ Issue 間の依存関係と実装順は [実装計画](docs/implementation-plan.
 | Phase 2 | タグレジストリ、アドレス空間、型・品質・時刻の写像、設定、管理 UI、Windows サービス | 主に banto-hub。写像の純関数は core |
 | Phase 3 | 証明書、SecurityPolicy、認証、トラスト、相互接続、ソーク | 本リポジトリとハブ |
 | Write | 利用者の書き込みハンドラーに通す Write（[ADR-0004](docs/adr/0004-write-through-host-handler.md)）。Hub 側は banto-industrial #653 | 本リポジトリとハブ |
-| クライアント | Hub のドライバ向けの Read / Write の部品（[ADR-0005](docs/adr/0005-client-as-hub-driver.md)、[#33](https://github.com/tyaro/banto-opcua/issues/33)）と、購読で最新値を持つ購読モード（[ADR-0006](docs/adr/0006-client-subscription-latest-values.md)）。ドライバ本体は banto-industrial #678 | 本リポジトリとハブ |
+| クライアント | Hub のドライバ向けの Read / Write の部品（[ADR-0005](docs/adr/0005-client-as-hub-driver.md)、[#33](https://github.com/tyaro/banto-opcua/issues/33)）と、購読で最新値を持つ購読モード（[ADR-0006](docs/adr/0006-client-subscription-latest-values.md)）、ノードの説明・単位・レンジを読む `read_metadata`（[ADR-0008](docs/adr/0008-tag-metadata-properties.md)）。ドライバ本体は banto-industrial #678 | 本リポジトリとハブ |
 | 別 issue | Method、Event、Historical Access、クライアントの Browse | 未起票または別 issue |
 
 #201 の初期スコープ外はクライアント製品、Method、Event / Alarm、
@@ -88,7 +92,7 @@ Phase 1 の試験用セキュリティは `None` / `None` / Anonymous。既定 b
 | 層 | いつ | 何を見るか |
 | --- | --- | --- |
 | 単体 | PR の CI（Linux と Windows） | core の写像と NodeId の解析。クライアントの要求の分割、Write の結末の分類、購読の最新値の表。サーバーを起動しない |
-| プロセス内 | 同上 | ループバックで `ServerStatus/State` を読む。固定タグは Browse / Read / DataChange 通知と、サンプルタグが読み取り専用の AccessLevel であることを確認する。Write は拒否の StatusCode、遅いハンドラーの間も Read と購読が止まらないこと、ノード数と同時実行数の上限、CloseSession の後や TCP だけが切れたときに残りのノードを書かないことを確認する（`tests/write.rs`）。IPv6 が使える環境では `[::1]` でも標準ノードの疎通を見る。クライアントの部品は、まとめて Read / Write、購読モード、上限による分割、切断と自動再接続を本サーバー相手に確かめる（`tests/client_batch.rs`・`client_write.rs`・`client_subscribe.rs`） |
+| プロセス内 | 同上 | ループバックで `ServerStatus/State` を読む。固定タグは Browse / Read / DataChange 通知と、サンプルタグが読み取り専用の AccessLevel であることを確認する。Write は拒否の StatusCode、遅いハンドラーの間も Read と購読が止まらないこと、ノード数と同時実行数の上限、CloseSession の後や TCP だけが切れたときに残りのノードを書かないことを確認する（`tests/write.rs`）。IPv6 が使える環境では `[::1]` でも標準ノードの疎通を見る。クライアントの部品は、まとめて Read / Write、購読モード、上限による分割、切断と自動再接続を本サーバー相手に確かめる（`tests/client_batch.rs`・`client_write.rs`・`client_subscribe.rs`）。タグの説明・単位・レンジは、型定義・プロパティ・更新の通知・クライアントでの読み戻しを確かめる（`tests/tag_metadata.rs`） |
 | 接続失敗 | 接続処理を変更する PR・毎日・手動（Linux と Windows） | Discovery だけを通すプロキシでセッションを止め、時間切れとキャンセルで TCP 接続が閉じることを確認する。PR の必須 `ci-gate` には含めない |
 | 相互接続 | 別ワークフロー（`workflow_dispatch`、毎日、main への push、PR はパスで絞る） | Python asyncua → 本サーバーの GetEndpoints / Browse / Read / Subscription / Write と、本クライアント → opc-plc のまとめて Read / Write と購読モード。固定バージョンと実行方法は [`interop/README.md`](interop/README.md) |
 | 手動 | 開発者の手元 | 下記のサンプルサーバーを起動し、UaExpert から Browse / Read / Subscribe。Write は [書き込みの手動確認](#書き込みの手動確認uaexpert) の手順 |
@@ -170,10 +174,6 @@ cargo deny --all-features check
 banto の ADR-0011 に合わせ、git タグで配布する（最初のタグは `v0.1.0`）。crates.io への公開は
 未決のため `publish = false`。消費側は `Cargo.lock` の再現性を保つため、
 タグを固定して依存する（banto-industrial の `slmp` と同じ）。
-
-## 既知の依存の注意
-
-`rsa` 0.9.10（`async-opcua-crypto` 経由）の RUSTSEC-2023-0071 を、見直し期日付きで `deny.toml` が無視している。理由と期限は [ADR-0001](docs/adr/0001-async-opcua-base.md)。
 
 ## 決定事項
 
