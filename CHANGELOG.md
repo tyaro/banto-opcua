@@ -19,6 +19,7 @@
 - サーバーの `RunningServer::add_tag_reading_with_metadata` と `update_tag_metadata`。説明は Description 属性に、単位・レンジ・文言は EngineeringUnits・EURange・TrueState・FalseState のプロパティにする。型定義は、EURange があれば AnalogItemType、単位だけなら BaseAnalogType、文言のある Boolean は TwoStateDiscreteType、ほかは BaseDataVariableType。
 - `update_tag_metadata` は、ノードの形（型定義と持つプロパティ）が同じなら同じ NodeId のまま書き換えて購読者へ通知する。形が変わるならエラーにし、何も変えない。
 - `remove_tag` はプロパティも消し、プロパティの購読者へも `BadNodeIdUnknown` を通知する。
+- クライアントの `ConnectedClient::read_metadata` と `NodeMetadata`。ノードの並びの Description と EngineeringUnits・EURange・TrueState・FalseState のプロパティを読み、`TagMetadata` で返す（型定義は問わない）。Read と TranslateBrowsePathsToNodeIds は `read_batch` と同じ規則で分けて送る。
 
 ### 変更
 

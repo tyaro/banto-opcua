@@ -43,7 +43,11 @@ Description・EngineeringUnits・EURange が無く、渡す口も無かった。
 - **プロパティの NodeId。** タグの NodeId（文字列）とも、フォルダーの ByteString とも重ならない
   ByteString にする。タグを削除するときはプロパティも消し、購読者へ `BadNodeIdUnknown` を通知する。
 
-クライアント（ADR-0005）の、ブラウズしたノードからこれらの属性を読む口は、別の PR で足す。
+- **クライアント（ADR-0005）。** `ConnectedClient::read_metadata` が、ノードの並びの Description と、
+  同じ BrowseName のプロパティ（HasProperty とその下位の参照を TranslateBrowsePathsToNodeIds で
+  辿る）を読み、`TagMetadata` で返す。型定義は問わないので、他社のサーバーの単位も取り込める
+  （banto-industrial #678）。UNECE の名前空間の UnitId はコードに戻す。無い・読めない・型の違う
+  プロパティは `None` にし、ノード全体を失敗にはしない。
 
 ## 検討した代替案
 

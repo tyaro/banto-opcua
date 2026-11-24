@@ -77,7 +77,7 @@ Issue 間の依存関係と実装順は [実装計画](docs/implementation-plan.
 | Phase 2 | タグレジストリ、アドレス空間、型・品質・時刻の写像、設定、管理 UI、Windows サービス | 主に banto-hub。写像の純関数は core |
 | Phase 3 | 証明書、SecurityPolicy、認証、トラスト、相互接続、ソーク | 本リポジトリとハブ |
 | Write | 利用者の書き込みハンドラーに通す Write（[ADR-0004](docs/adr/0004-write-through-host-handler.md)）。Hub 側は banto-industrial #653 | 本リポジトリとハブ |
-| クライアント | Hub のドライバ向けの Read / Write の部品（[ADR-0005](docs/adr/0005-client-as-hub-driver.md)、[#33](https://github.com/tyaro/banto-opcua/issues/33)）と、購読で最新値を持つ購読モード（[ADR-0006](docs/adr/0006-client-subscription-latest-values.md)）。ドライバ本体は banto-industrial #678 | 本リポジトリとハブ |
+| クライアント | Hub のドライバ向けの Read / Write の部品（[ADR-0005](docs/adr/0005-client-as-hub-driver.md)、[#33](https://github.com/tyaro/banto-opcua/issues/33)）と、購読で最新値を持つ購読モード（[ADR-0006](docs/adr/0006-client-subscription-latest-values.md)）、ノードの説明・単位・レンジを読む `read_metadata`（[ADR-0008](docs/adr/0008-tag-metadata-properties.md)）。ドライバ本体は banto-industrial #678 | 本リポジトリとハブ |
 | 別 issue | Method、Event、Historical Access、クライアントの Browse | 未起票または別 issue |
 
 #201 の初期スコープ外はクライアント製品、Method、Event / Alarm、
@@ -92,7 +92,7 @@ Phase 1 の試験用セキュリティは `None` / `None` / Anonymous。既定 b
 | 層 | いつ | 何を見るか |
 | --- | --- | --- |
 | 単体 | PR の CI（Linux と Windows） | core の写像と NodeId の解析。クライアントの要求の分割、Write の結末の分類、購読の最新値の表。サーバーを起動しない |
-| プロセス内 | 同上 | ループバックで `ServerStatus/State` を読む。固定タグは Browse / Read / DataChange 通知と、サンプルタグが読み取り専用の AccessLevel であることを確認する。Write は拒否の StatusCode、遅いハンドラーの間も Read と購読が止まらないこと、ノード数と同時実行数の上限、CloseSession の後や TCP だけが切れたときに残りのノードを書かないことを確認する（`tests/write.rs`）。IPv6 が使える環境では `[::1]` でも標準ノードの疎通を見る。クライアントの部品は、まとめて Read / Write、購読モード、上限による分割、切断と自動再接続を本サーバー相手に確かめる（`tests/client_batch.rs`・`client_write.rs`・`client_subscribe.rs`） |
+| プロセス内 | 同上 | ループバックで `ServerStatus/State` を読む。固定タグは Browse / Read / DataChange 通知と、サンプルタグが読み取り専用の AccessLevel であることを確認する。Write は拒否の StatusCode、遅いハンドラーの間も Read と購読が止まらないこと、ノード数と同時実行数の上限、CloseSession の後や TCP だけが切れたときに残りのノードを書かないことを確認する（`tests/write.rs`）。IPv6 が使える環境では `[::1]` でも標準ノードの疎通を見る。クライアントの部品は、まとめて Read / Write、購読モード、上限による分割、切断と自動再接続を本サーバー相手に確かめる（`tests/client_batch.rs`・`client_write.rs`・`client_subscribe.rs`）。タグの説明・単位・レンジは、型定義・プロパティ・更新の通知・クライアントでの読み戻しを確かめる（`tests/tag_metadata.rs`） |
 | 接続失敗 | 接続処理を変更する PR・毎日・手動（Linux と Windows） | Discovery だけを通すプロキシでセッションを止め、時間切れとキャンセルで TCP 接続が閉じることを確認する。PR の必須 `ci-gate` には含めない |
 | 相互接続 | 別ワークフロー（`workflow_dispatch`、毎日、main への push、PR はパスで絞る） | Python asyncua → 本サーバーの GetEndpoints / Browse / Read / Subscription / Write と、本クライアント → opc-plc のまとめて Read / Write と購読モード。固定バージョンと実行方法は [`interop/README.md`](interop/README.md) |
 | 手動 | 開発者の手元 | 下記のサンプルサーバーを起動し、UaExpert から Browse / Read / Subscribe。Write は [書き込みの手動確認](#書き込みの手動確認uaexpert) の手順 |

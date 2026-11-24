@@ -476,3 +476,73 @@ async fn recv(receiver: &mut mpsc::UnboundedReceiver<DataValue>) -> DataValue {
         .expect("DataChange の待ち時間が切れた")
         .expect("DataChange が届く")
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_client_component_reads_back_the_published_metadata() {
+    use banto_opcua_client::{
+        ClientConfig, OpcUaClient,
+        model::{NodeAddress, StatusCode as ClientStatus},
+    };
+
+    let server = OpcUaServer::start(ServerConfig::default().with_port(0).with_sample_tags(false))
+        .await
+        .expect("サーバーを起動する");
+    let temperature = temperature_metadata();
+    let running = TagMetadata::new().with_two_state(TwoStateLabels::new("運転", "停止"));
+    server
+        .add_tag_reading_with_metadata(
+            CONNECTION,
+            GROUP,
+            "Temperature",
+            reading(DataType::Double, 850.0),
+            &temperature,
+        )
+        .expect("登録する");
+    server
+        .add_tag_reading_with_metadata(
+            CONNECTION,
+            GROUP,
+            "Running",
+            reading(DataType::Boolean, 1.0),
+            &running,
+        )
+        .expect("登録する");
+    server
+        .add_tag_reading(CONNECTION, GROUP, "Plain", reading(DataType::Int32, 1.0))
+        .expect("登録する");
+    let client = OpcUaClient::connect_with(ClientConfig::new(server.endpoint()))
+        .await
+        .expect("クライアントが接続する");
+    let address = |tag: &str| -> NodeAddress {
+        format!("nsu=urn:banto:opcua:tags;s={CONNECTION}.{GROUP}.{tag}")
+            .parse()
+            .expect("NodeAddress を解析できる")
+    };
+
+    let results = client
+        .read_metadata(&[
+            address("Temperature"),
+            address("Running"),
+            address("Plain"),
+            address("Missing"),
+            "nsu=urn:missing;i=1".parse().expect("解析できる"),
+        ])
+        .await
+        .expect("まとめて読む");
+
+    assert_eq!(results.len(), 5);
+    assert_eq!(results[0].status, ClientStatus::GOOD);
+    assert_eq!(
+        results[0].metadata, temperature,
+        "単位の UNECE コードまで往復する"
+    );
+    assert_eq!(results[1].metadata, running);
+    assert_eq!(results[2].status, ClientStatus::GOOD);
+    assert_eq!(results[2].metadata, TagMetadata::new());
+    assert_eq!(results[3].status, ClientStatus::BAD_NODE_ID_UNKNOWN);
+    assert_eq!(results[3].metadata, TagMetadata::new());
+    assert_eq!(results[4].status, ClientStatus::BAD_NODE_ID_UNKNOWN);
+
+    client.disconnect().await.expect("切断する");
+    server.shutdown().await.expect("止める");
+}
