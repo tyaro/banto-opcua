@@ -1,5 +1,6 @@
-//! `ClientBuilder` で None / Anonymous のセッションを張り、まとめて読み書きする（ADR-0005）。
-//! 購読モードでは、購読で受けた最新値を持つ（ADR-0006）。
+//! `ClientBuilder` でセッションを張り、まとめて読み書きする（ADR-0005）。
+//! 購読モードでは、購読で受けた最新値を持つ（ADR-0006）。通信の保護、利用者、
+//! サーバーの証明書の信頼は ADR-0009。
 
 use std::{
     sync::{
@@ -9,20 +10,21 @@ use std::{
     time::Duration,
 };
 
-use banto_opcua_core::{NodeAddress, NodeId, ScalarValue, StatusCode};
+use banto_opcua_core::{NodeAddress, NodeId, ScalarValue, SecurityPolicy, StatusCode};
+use banto_opcua_pki::{
+    ApplicationIdentity, CERTIFICATE_PATH, PRIVATE_KEY_PATH, prepare_own_certificate,
+};
 use futures_util::StreamExt;
 use opcua::{
     client::{
-        Client, ClientBuilder, IdentityToken, Session, SessionEventLoop, SessionPollResult,
-        SubscriptionActivity, SubscriptionCallbacks, services, transport::TcpConnector,
+        Client, ClientBuilder, Session, SessionEventLoop, SessionPollResult, SubscriptionActivity,
+        SubscriptionCallbacks, services, transport::TcpConnector,
     },
-    crypto::SecurityPolicy,
     types::{
-        AttributeId, BrowsePath, DataValue, ExtensionObject, MessageSecurityMode,
-        MonitoredItemCreateRequest, MonitoringMode, MonitoringParameters, NodeId as UaNodeId,
-        QualifiedName, ReadValueId, ReferenceTypeId, RelativePath, RelativePathElement,
-        StatusCode as UaStatusCode, TimestampsToReturn, UserTokenPolicy, VariableId, Variant,
-        WriteRequest, WriteValue,
+        AttributeId, BrowsePath, DataValue, ExtensionObject, MonitoredItemCreateRequest,
+        MonitoringMode, MonitoringParameters, NodeId as UaNodeId, QualifiedName, ReadValueId,
+        ReferenceTypeId, RelativePath, RelativePathElement, StatusCode as UaStatusCode,
+        TimestampsToReturn, VariableId, Variant, WriteRequest, WriteValue,
     },
 };
 use tokio::{sync::watch, task::JoinHandle};
@@ -32,6 +34,10 @@ use crate::{
     chunk::{ChunkFailure, send_in_chunks},
     convert::{core_status_code, ua_node_id, variant_from_scalar},
     metadata::{self, NodeMetadata, Property},
+    security::{
+        ClientPki, EndpointInfo, check_server_certificate, classify_failure, endpoint_info,
+        identity_token, select_endpoint,
+    },
     subscribe::{PublishSignals, Slot, Table},
     write::{ChunkWriteFailure, classify_response, error_of, outcomes_of},
 };
@@ -54,11 +60,32 @@ impl OpcUaClient {
         Self::connect_with(ClientConfig::new(endpoint).with_connect_timeout(session_timeout)).await
     }
 
+    /// サーバーが広告するエンドポイントの一覧を読む（GetEndpoints、ADR-0009）。
+    ///
+    /// 接続の画面で、選べる SecurityPolicy・MessageSecurityMode・利用者のトークンと、
+    /// サーバーの証明書の拇印を見せるのに使う。使うのは `config` の URL と
+    /// [`ClientConfig::request_timeout`] だけ。セッションは作らず、鍵も作らない。
+    pub async fn endpoints(config: &ClientConfig) -> Result<Vec<EndpointInfo>, Error> {
+        config.validate().map_err(Error::Build)?;
+        let pki = ClientPki::prepare(None)?;
+        let client = base_builder(config, pki.path())
+            .client()
+            .map_err(|reasons| Error::Build(reasons.join("; ")))?;
+        let endpoints = client
+            .get_server_endpoints_from_url(config.endpoint_url.as_str())
+            .await
+            .map_err(|err| Error::Connect(format!("エンドポイントを読めませんでした: {err}")))?;
+        Ok(endpoints.iter().map(endpoint_info).collect())
+    }
+
     /// 設定に従って接続し、NamespaceArray と OperationLimits を読む。
     ///
-    /// `verify_server_certs(false)` はホスト名検証だけでなく、サーバー証明書の
-    /// 検証全体を無効にする。Phase 1 は平文・匿名であり、サンプル証明書では
-    /// 検証を通せない。Phase 3 TODO: 証明書検証を戻す。
+    /// まず GetEndpoints で、設定の SecurityPolicy・MessageSecurityMode・利用者の
+    /// トークンを受け付けるエンドポイントを探し（無ければ [`Error::EndpointNotFound`]）、
+    /// そこへ接続する。SecurityPolicy が `None` でなければ、`pki_dir` の鍵と証明書を
+    /// 用意し（初回は作る）、サーバーの証明書を信頼の一覧で確かめる。断られたときは
+    /// [`Error::ServerCertificateUntrusted`]・[`Error::ServerCertificateInvalid`]・
+    /// [`Error::ClientCertificateRejected`]・[`Error::UserRejected`] に分ける（ADR-0009）。
     ///
     /// セッションの確立を待つ間に時間切れ、呼び出し元のキャンセル、または
     /// async-opcua が接続を諦めたときは、イベントループを中止して `Err` を返す。
@@ -66,23 +93,27 @@ impl OpcUaClient {
     /// 失敗したときだけ `Err` にする（ノード単位の失敗は既定値を使う）。
     pub async fn connect_with(config: ClientConfig) -> Result<ConnectedClient, Error> {
         config.validate().map_err(Error::Build)?;
-        let pki = tempfile::tempdir().map_err(Error::Pki)?;
-        let builder = ClientBuilder::new()
-            .application_name("banto-opcua-client")
-            .application_uri("urn:banto:opcua:client")
-            .product_uri("urn:banto:opcua")
-            .create_sample_keypair(true)
-            .pki_dir(pki.path())
-            .trust_server_certs(true)
-            // 証明書検証全体を無効化する。ホスト名だけのスイッチではない。
-            // Phase 3 TODO: 検証を戻す。
-            .verify_server_certs(false)
-            .request_timeout(config.request_timeout)
+        let pki = ClientPki::prepare(config.pki_dir.as_deref())?;
+        let secure = config.security_policy != SecurityPolicy::None;
+        if secure {
+            let identity =
+                ApplicationIdentity::new(&config.application_name, &config.application_uri);
+            prepare_own_certificate(pki.path(), &identity).map_err(Error::Pki)?;
+        }
+        let builder = base_builder(&config, pki.path())
+            .trust_server_certs(config.trust_all_server_certificates)
             .keep_alive_interval(config.keep_alive_interval)
             .max_failed_keep_alive_count(config.max_failed_keep_alive_count.get())
             // 張り直した後の購読は部品が作り直す（ADR-0006）。async-opcua の作り直しは
             // 古い名前空間の番号をそのまま使い、作った購読もこちらでは追えない。
             .recreate_subscriptions(false);
+        let builder = if secure {
+            builder
+                .certificate_path(CERTIFICATE_PATH)
+                .private_key_path(PRIVATE_KEY_PATH)
+        } else {
+            builder
+        };
         let builder = match config.reconnect {
             ReconnectPolicy::Disabled => builder.session_retry_limit(0),
             ReconnectPolicy::Automatic {
@@ -100,17 +131,14 @@ impl OpcUaClient {
             .client()
             .map_err(|reasons| Error::Build(reasons.join("; ")))?;
 
-        let (session, event_loop) = client
-            .connect_to_matching_endpoint(
-                (
-                    config.endpoint_url.as_str(),
-                    SecurityPolicy::None.to_str(),
-                    MessageSecurityMode::None,
-                    UserTokenPolicy::anonymous(),
-                ),
-                IdentityToken::Anonymous,
-            )
+        let endpoints = client
+            .get_server_endpoints_from_url(config.endpoint_url.as_str())
             .await
+            .map_err(|err| Error::Connect(err.to_string()))?;
+        let endpoint = select_endpoint(&endpoints, &config)?;
+        check_server_certificate(&endpoint, &config, pki.path())?;
+        let (session, event_loop) = client
+            .connect_to_endpoint_directly(endpoint.clone(), identity_token(&config.identity))
             .map_err(|err| Error::Connect(err.to_string()))?;
         if config.reconnect == ReconnectPolicy::Disabled {
             // session_retry_limit(0) だけでは、切断後に 1 回張り直しを試す。
@@ -133,9 +161,7 @@ impl OpcUaClient {
         let generation = match established {
             Ok(Link::Connected(generation)) => generation,
             Ok(Link::Closed(Some(status))) => {
-                return Err(Error::Connect(format!(
-                    "セッションが確立しませんでした: {status}"
-                )));
+                return Err(classify_failure(status, &config));
             }
             _ => return Err(Error::Connect("セッションが確立しませんでした".to_owned())),
         };
@@ -165,6 +191,19 @@ impl OpcUaClient {
     }
 }
 
+/// 接続と GetEndpoints に共通の設定。自分の鍵は作らせない（暗号化するときだけ
+/// [`prepare_own_certificate`] が用意する）。サーバーの証明書の検査は止めない。
+fn base_builder(config: &ClientConfig, pki_dir: &std::path::Path) -> ClientBuilder {
+    ClientBuilder::new()
+        .application_name(config.application_name.as_str())
+        .application_uri(config.application_uri.as_str())
+        .product_uri("urn:banto:opcua")
+        .create_sample_keypair(false)
+        .pki_dir(pki_dir)
+        .verify_server_certs(true)
+        .request_timeout(config.request_timeout)
+}
+
 /// イベントループから見た接続の状態。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Link {
@@ -175,7 +214,7 @@ enum Link {
     /// 切れて、自動再接続で張り直している。
     Reconnecting,
     /// イベントループが終わった。以降は接続しない。諦めた理由があれば持つ。
-    Closed(Option<StatusCode>),
+    Closed(Option<UaStatusCode>),
 }
 
 /// イベントループを回し、接続と切断を `link` へ、Publish の失敗を `signals` へ知らせる。
@@ -201,7 +240,7 @@ async fn drive(
             )))) => signals.on_publish_failed(status),
             Some(Ok(_)) => {}
             Some(Err(status)) => {
-                link.send_replace(Link::Closed(Some(core_status_code(status))));
+                link.send_replace(Link::Closed(Some(status)));
                 return;
             }
             None => {
@@ -417,7 +456,7 @@ pub struct ConnectedClient {
     registrations: AtomicU64,
     task: Option<JoinHandle<()>>,
     _client: Client,
-    _pki: tempfile::TempDir,
+    _pki: ClientPki,
 }
 
 impl ConnectedClient {

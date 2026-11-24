@@ -44,9 +44,14 @@ fn reading(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dynamic_readings_keep_type_quality_and_timestamps_through_subscription() {
-    let server = OpcUaServer::start(ServerConfig::default().with_port(0).with_sample_tags(false))
-        .await
-        .expect("サーバーを起動する");
+    let server = OpcUaServer::start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0)
+            .with_sample_tags(false),
+    )
+    .await
+    .expect("サーバーを起動する");
     let missing = reading(DataType::Double, None, Quality::Bad, None, None, 10);
     server
         .add_tag_reading("PLC1", "Line1", "Speed", missing)

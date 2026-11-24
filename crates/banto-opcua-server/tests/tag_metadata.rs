@@ -172,9 +172,14 @@ fn text(value: &DataValue) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn metadata_becomes_description_type_definition_and_properties() {
-    let server = OpcUaServer::start(ServerConfig::default().with_port(0).with_sample_tags(false))
-        .await
-        .expect("サーバーを起動する");
+    let server = OpcUaServer::start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0)
+            .with_sample_tags(false),
+    )
+    .await
+    .expect("サーバーを起動する");
     server
         .add_tag_reading_with_metadata(
             CONNECTION,
@@ -310,9 +315,14 @@ async fn metadata_becomes_description_type_definition_and_properties() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn updates_keep_the_node_id_and_notify_subscribers() {
-    let server = OpcUaServer::start(ServerConfig::default().with_port(0).with_sample_tags(false))
-        .await
-        .expect("サーバーを起動する");
+    let server = OpcUaServer::start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0)
+            .with_sample_tags(false),
+    )
+    .await
+    .expect("サーバーを起動する");
     server
         .add_tag_reading_with_metadata(
             CONNECTION,
@@ -387,9 +397,14 @@ async fn updates_keep_the_node_id_and_notify_subscribers() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shape_changes_and_invalid_metadata_are_rejected_and_removal_drops_properties() {
-    let server = OpcUaServer::start(ServerConfig::default().with_port(0).with_sample_tags(false))
-        .await
-        .expect("サーバーを起動する");
+    let server = OpcUaServer::start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0)
+            .with_sample_tags(false),
+    )
+    .await
+    .expect("サーバーを起動する");
     server
         .add_tag_reading_with_metadata(
             CONNECTION,
@@ -488,9 +503,14 @@ async fn the_client_component_reads_back_the_published_metadata() {
         model::{NodeAddress, StatusCode as ClientStatus},
     };
 
-    let server = OpcUaServer::start(ServerConfig::default().with_port(0).with_sample_tags(false))
-        .await
-        .expect("サーバーを起動する");
+    let server = OpcUaServer::start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0)
+            .with_sample_tags(false),
+    )
+    .await
+    .expect("サーバーを起動する");
     let temperature = temperature_metadata();
     let running = TagMetadata::new().with_two_state(TwoStateLabels::new("運転", "停止"));
     server
@@ -605,9 +625,14 @@ async fn assert_quiet(receiver: &mut mpsc::UnboundedReceiver<(NodeId, DataValue)
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn semantic_changes_reach_value_subscribers_with_the_semantics_changed_bit() {
-    let server = OpcUaServer::start(ServerConfig::default().with_port(0).with_sample_tags(false))
-        .await
-        .expect("サーバーを起動する");
+    let server = OpcUaServer::start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0)
+            .with_sample_tags(false),
+    )
+    .await
+    .expect("サーバーを起動する");
     let sampled = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
     server
         .add_tag_reading_with_metadata(
@@ -730,9 +755,14 @@ async fn semantic_changes_reach_value_subscribers_with_the_semantics_changed_bit
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn property_subscriptions_resume_when_the_tag_is_registered_again() {
-    let server = OpcUaServer::start(ServerConfig::default().with_port(0).with_sample_tags(false))
-        .await
-        .expect("サーバーを起動する");
+    let server = OpcUaServer::start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0)
+            .with_sample_tags(false),
+    )
+    .await
+    .expect("サーバーを起動する");
     server
         .add_tag_reading_with_metadata(
             CONNECTION,
@@ -920,9 +950,14 @@ async fn units_are_read_from_nodes_without_a_description_attribute() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn semantics_changed_survives_a_queue_of_one_overwritten_before_publish() {
-    let server = OpcUaServer::start(ServerConfig::default().with_port(0).with_sample_tags(false))
-        .await
-        .expect("サーバーを起動する");
+    let server = OpcUaServer::start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0)
+            .with_sample_tags(false),
+    )
+    .await
+    .expect("サーバーを起動する");
     server
         .add_tag_reading_with_metadata(
             CONNECTION,
@@ -997,9 +1032,14 @@ async fn semantics_changed_survives_a_queue_of_one_overwritten_before_publish() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn semantics_changed_survives_a_sample_replaced_within_the_sampling_interval() {
-    let server = OpcUaServer::start(ServerConfig::default().with_port(0).with_sample_tags(false))
-        .await
-        .expect("サーバーを起動する");
+    let server = OpcUaServer::start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0)
+            .with_sample_tags(false),
+    )
+    .await
+    .expect("サーバーを起動する");
     // 採取時刻を少し先にし、単位の変更を載せた通知が採取の間隔の中で保留されるようにする。
     let sampled = SystemTime::now() + Duration::from_secs(2);
     let at = |offset_ms: u64, number: f64| {

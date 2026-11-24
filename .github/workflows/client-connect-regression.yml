@@ -10,6 +10,7 @@ on:
   pull_request:
     paths:
       - "crates/banto-opcua-client/**"
+      - "crates/banto-opcua-pki/**"
       - "crates/banto-opcua-server/tests/client_connect_failure.rs"
       - "crates/banto-opcua-server/src/server.rs"
       - "Cargo.toml"

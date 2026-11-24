@@ -17,6 +17,7 @@ use opcua::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fixed_tags_can_be_browsed_read_and_subscribed() {
     let config = ServerConfig::default()
+        .with_none_endpoint(true)
         .with_port(0)
         .with_namespace_uri("urn:banto:opcua:phase1-test-tags");
     let namespace_uri = config.namespace_uri.clone();

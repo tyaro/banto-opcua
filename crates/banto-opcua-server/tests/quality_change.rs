@@ -16,9 +16,13 @@ use tokio::sync::mpsc;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn quality_changes_are_reported_without_a_data_change_filter() {
-    let server = OpcUaServer::start(ServerConfig::default().with_port(0))
-        .await
-        .expect("サーバーを起動する");
+    let server = OpcUaServer::start(
+        ServerConfig::default()
+            .with_none_endpoint(true)
+            .with_port(0),
+    )
+    .await
+    .expect("サーバーを起動する");
     let pki = tempfile::tempdir().expect("一時 PKI を作る");
     let mut client = ClientBuilder::new()
         .application_name("banto-opcua-quality-test")

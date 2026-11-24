@@ -6,12 +6,14 @@
 
 use crate::{MappedValue, StatusCode};
 
-/// 書いた主体。今は匿名だけで、UserName と証明書の主体は Phase 3 で足す。
+/// 書いた主体。証明書の利用者トークンは受け付けないので、主体にも無い（ADR-0009）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum WritePrincipal {
     /// Anonymous のユーザートークン。匿名を許すかどうかはハンドラーが決める。
     Anonymous,
+    /// 利用者の照合を通った UserName のトークン。値は照合に渡した利用者名。
+    User(String),
 }
 
 /// 接続元の情報。async-opcua のセッションから取れるものに限る。

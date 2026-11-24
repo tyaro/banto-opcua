@@ -1,0 +1,19 @@
+# サーバーとクライアントが共有する、自分の鍵と証明書の置き場と、相手の証明書の
+# 信頼の一覧（ADR-0003、ADR-0009）。async-opcua は暗号の部分だけを使う。
+[package]
+name = "banto-opcua-pki"
+description = "banto OPC UA の鍵と証明書の置き場、相手の証明書の信頼の一覧（trusted / rejected）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-opcua = { workspace = true }
+banto-opcua-core = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

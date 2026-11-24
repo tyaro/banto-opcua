@@ -1,12 +1,19 @@
 """Python asyncua から固定タグの Browse / Read / Subscription と、書き込み可の
-タグへの Write を確認する。"""
+タグへの Write を確認する。暗号化したエンドポイントへの UserName の接続も確かめる
+（ADR-0009）。"""
 
 import asyncio
 import select
+import socket
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 from asyncua import Client, ua
+from asyncua.crypto import security_policies
+from asyncua.crypto.cert_gen import setup_self_signed_certificate
+from cryptography.x509.oid import ExtendedKeyUsageOID
 
 CLIENT_URI = "urn:banto:opcua:interop-asyncua"
 
@@ -163,6 +170,92 @@ async def verify(endpoint, process):
         await verify_writes(client, namespace, process)
 
 
+async def connect_secure(endpoint, policy, mode, user, password, cert, key):
+    client = Client(url=endpoint, timeout=10)
+    client.application_uri = CLIENT_URI
+    client.set_user(user)
+    client.set_password(password)
+    await client.set_security(policy, str(cert), str(key), mode=mode)
+    return client
+
+
+async def verify_secure(endpoint, process):
+    """暗号化したエンドポイントで、UserName の照合と書き込みの主体を確かめる。"""
+    with tempfile.TemporaryDirectory() as directory:
+        cert = Path(directory) / "cert.der"
+        key = Path(directory) / "key.pem"
+        await setup_self_signed_certificate(
+            key,
+            cert,
+            CLIENT_URI,
+            socket.gethostname(),
+            [ExtendedKeyUsageOID.CLIENT_AUTH],
+            {"commonName": "banto-opcua-interop-asyncua"},
+        )
+
+        client = Client(url=endpoint, timeout=10)
+        policies = {
+            (item.SecurityPolicyUri, item.SecurityMode): {
+                token.TokenType for token in item.UserIdentityTokens
+            }
+            for item in await client.connect_and_get_server_endpoints()
+        }
+        for policy in (
+            security_policies.SecurityPolicyBasic256Sha256,
+            security_policies.SecurityPolicyAes128Sha256RsaOaep,
+            security_policies.SecurityPolicyAes256Sha256RsaPss,
+        ):
+            for mode in (ua.MessageSecurityMode.Sign, ua.MessageSecurityMode.SignAndEncrypt):
+                assert policies[(policy.URI, mode)] == {
+                    ua.UserTokenType.Anonymous,
+                    ua.UserTokenType.UserName,
+                }, policies
+        none = policies[
+            (security_policies.SecurityPolicyNone.URI, ua.MessageSecurityMode.None_)
+        ]
+        assert none == {ua.UserTokenType.Anonymous}, policies
+
+        wrong = await connect_secure(
+            endpoint,
+            security_policies.SecurityPolicyBasic256Sha256,
+            ua.MessageSecurityMode.SignAndEncrypt,
+            "operator",
+            "wrong",
+            cert,
+            key,
+        )
+        try:
+            await wrong.connect()
+        except ua.uaerrors.BadUserAccessDenied:
+            pass
+        else:
+            await wrong.disconnect()
+            raise AssertionError("違うパスワードは BadUserAccessDenied で断られるはず")
+
+        for policy in (
+            security_policies.SecurityPolicyBasic256Sha256,
+            security_policies.SecurityPolicyAes256Sha256RsaPss,
+        ):
+            client = await connect_secure(
+                endpoint,
+                policy,
+                ua.MessageSecurityMode.SignAndEncrypt,
+                "operator",
+                "secret",
+                cert,
+                key,
+            )
+            async with client:
+                namespace = await client.get_namespace_index("urn:banto:opcua:tags")
+                setpoint = await client.nodes.objects.get_child(
+                    [f"{namespace}:{name}" for name in ("Banto", "PLC2", "Cell1", "Setpoint")]
+                )
+                await setpoint.write_value(7.5, ua.VariantType.Double)
+                assert await expect_line(process, "WRITE ") == (
+                    f"WRITE PLC2.Cell1.Setpoint 7.5 user:operator {CLIENT_URI}"
+                )
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: test_asyncua.py <interop_fixed_tags executable>")
@@ -176,7 +269,9 @@ def main():
         line = process.stdout.readline().strip()
         if not line.startswith("ENDPOINT="):
             raise RuntimeError(f"サーバーの接続先がありません: {line!r}")
-        asyncio.run(verify(line.removeprefix("ENDPOINT="), process))
+        endpoint = line.removeprefix("ENDPOINT=")
+        asyncio.run(verify(endpoint, process))
+        asyncio.run(verify_secure(endpoint, process))
     finally:
         if process.poll() is None:
             try:

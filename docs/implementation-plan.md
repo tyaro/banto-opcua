@@ -1,6 +1,6 @@
 # OPC UA 実装計画
 
-- 更新日: 2026-10-17
+- 更新日: 2026-11-24
 - 親課題: [banto-industrial #201](https://github.com/tyaro/banto-industrial/issues/201)
 - 対象: 本リポジトリの [#3〜#9](https://github.com/tyaro/banto-opcua/issues) と [#25](https://github.com/tyaro/banto-opcua/issues/25)
 
@@ -20,8 +20,10 @@ PR #1 はサーバーの起動と標準ノード `ServerStatus/State` の Read �
 ハブの確認は banto-industrial #632 で実装した。Write は ADR-0004 で設計し、
 #25 の PR #27（node manager の置き換え）、PR #28（書き込みハンドラー）、
 PR #29（Python asyncua の相互接続）で実装した。Hub 側の結合は
-banto-industrial #653。Windows Service と UaExpert の実機確認（書き込みを含む）、
-Phase 3 のセキュリティは未実施。
+banto-industrial #653。Phase 3 のセキュリティ（署名・暗号化、UserName、証明書の信頼の一覧）は
+[#54](https://github.com/tyaro/banto-opcua/issues/54)（[ADR-0009](adr/0009-phase3-security.md)）で
+実装し、Python asyncua との相互接続で確かめた。Windows Service と UaExpert の実機確認
+（書き込みと暗号化を含む）、ソーク、CTT は未実施。
 以下は依存関係に沿った作業順であり、各段階を独立した PR で検証する。
 
 | 段階 | 作業 | 完了条件 |

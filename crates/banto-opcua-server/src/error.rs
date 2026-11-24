@@ -14,10 +14,14 @@ pub enum Error {
     /// 固定タグの名前空間 URI が空、または標準・アプリケーション名前空間と重複した。
     #[error("固定タグの namespace_uri が無効です: {0}")]
     InvalidNamespaceUri(String),
+    /// エンドポイントや認証の設定が成り立たない（ADR-0009）。
+    #[error("OPC UA サーバーのセキュリティ設定が成り立ちません: {0}")]
+    InvalidSecurity(String),
     /// TCP の bind、またはローカルアドレスの取得に失敗した。
     #[error("OPC UA サーバーの待受に失敗しました: {0}")]
     Bind(#[source] std::io::Error),
-    /// 自己署名証明書を置くディレクトリ（一時または `pki_dir`）を用意できなかった。
+    /// 自己署名の鍵と証明書、または信頼の一覧の置き場（一時または `pki_dir`）を
+    /// 用意できなかった。
     #[error("OPC UA サーバーの証明書ディレクトリを用意できませんでした: {0}")]
     Pki(#[source] std::io::Error),
     /// async-opcua の設定検証に失敗した。
