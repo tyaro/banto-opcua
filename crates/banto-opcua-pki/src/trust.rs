@@ -162,6 +162,10 @@ impl TrustList {
     /// 証明書など）は旧い版でも信頼に使われていなかったので、触らず、信頼にも数えない。
     /// 管理者が [`Self::add_trusted`] などで明示したときだけ一覧に入る。
     ///
+    /// 名前が旧い形（`<空でない前置き> [<40 桁の小文字の 16 進>].der`）に合わないファイルは
+    /// 開きもしない。置き場をほかのアプリが守るために置いた、利用者には読めない印の
+    /// ファイルなどがあっても、それを理由に失敗しない。
+    ///
     /// 移し先は一時ファイルに書いて名前を変えて確定し、読み戻して同じ証明書であることを
     /// 確かめてから移し元を消す。移し先に正しい証明書が既にあれば、移し元を消すだけに
     /// する。途中で失敗したら移し元は残る。移した数を返す。一覧のほかの操作も先にこれを呼ぶ。
@@ -170,7 +174,8 @@ impl TrustList {
         for state in [TrustState::Trusted, TrustState::Rejected] {
             let dir = self.dir.join(dir_name(state));
             for (path, name) in list_files(&dir)? {
-                if is_canonical_name(&name) {
+                // 名前の形だけで先に絞り、旧い名前になりえないファイルは開かない。
+                if !is_legacy_shaped_name(&name) {
                     continue;
                 }
                 let Some(cert) = read_certificate(&path)? else {
@@ -388,12 +393,34 @@ fn same_file(a: &Path, b: &Path) -> io::Result<bool> {
 }
 
 fn is_canonical_name(name: &str) -> bool {
-    name.strip_suffix(".der").is_some_and(|stem| {
-        stem.len() == 40
-            && stem
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    })
+    name.strip_suffix(".der")
+        .is_some_and(is_lowercase_thumbprint)
+}
+
+/// [`legacy_file_name`] が CN のある証明書に付ける名前の形か
+/// （`<空でない前置き> [<小文字の拇印>].der`）。中身は見ない。
+fn is_legacy_shaped_name(name: &str) -> bool {
+    let Some(rest) = name.strip_suffix("].der") else {
+        return false;
+    };
+    // CN は UTF-8 なので、文字の境目でないところでは切らない（`get` が `None` になる）。
+    let at = rest.len().saturating_sub(40);
+    match (rest.get(..at), rest.get(at..)) {
+        (Some(head), Some(thumbprint)) => {
+            is_lowercase_thumbprint(thumbprint)
+                && head
+                    .strip_suffix(" [")
+                    .is_some_and(|prefix| !prefix.is_empty())
+        }
+        _ => false,
+    }
+}
+
+fn is_lowercase_thumbprint(text: &str) -> bool {
+    text.len() == 40
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// ディレクトリ直下の通常のファイルと、その名前。ディレクトリが無ければ空。
@@ -612,6 +639,117 @@ mod tests {
         assert!(!names.contains(&legacy(&der)), "移し元は消える");
         assert!(names.contains("backup.der") && names.contains("README.txt"));
         assert_eq!(list.migrate().expect("2 回目"), 0);
+    }
+
+    #[test]
+    fn only_legacy_shaped_names_are_opened_by_migration() {
+        let root = tempfile::tempdir().expect("試験用ディレクトリ");
+        let (der, summary) = peer(root.path(), "peer");
+        let lower = summary.thumbprint.to_ascii_lowercase();
+        assert!(is_legacy_shaped_name(&legacy(&der)));
+        assert!(is_legacy_shaped_name(&format!("CN=計測 [{lower}].der")));
+        for name in [
+            format!("{lower}.der"),
+            format!(" [{lower}].der"),
+            format!("CN=peer [{}].der", summary.thumbprint.to_ascii_uppercase()),
+            format!("CN=peer [{lower}].pem"),
+            ".banto-safe-root".to_owned(),
+            "backup.der".to_owned(),
+            "計測].der".to_owned(),
+            "].der".to_owned(),
+        ] {
+            assert!(!is_legacy_shaped_name(&name), "{name}");
+        }
+    }
+
+    /// `path` を、この試験のプロセスから読めなくする。読み出しが `PermissionDenied` に
+    /// なったら `true`。読めてしまったときに `false` を返して続けるのは、権限を無視して
+    /// 読める Unix の root だけで、Windows で拒否が効かなければ試験を失敗にする。
+    fn make_unreadable(path: &Path) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000))
+                .expect("読めなくする");
+        }
+        #[cfg(windows)]
+        {
+            // Everyone の読み出しを DACL で拒否する。拒否は Administrators にも効く。
+            let status = std::process::Command::new("icacls")
+                .arg(path)
+                .args(["/deny", "*S-1-1-0:(R)"])
+                .status()
+                .expect("icacls を動かす");
+            assert!(status.success(), "icacls: {status}");
+        }
+        match std::fs::read(path) {
+            Err(error) => {
+                assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+                true
+            }
+            Ok(_) if cfg!(unix) => false,
+            Ok(_) => panic!("読み出しを拒否できていない: {}", path.display()),
+        }
+    }
+
+    fn make_readable(path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644))
+                .expect("権限を戻す");
+        }
+        #[cfg(windows)]
+        {
+            let status = std::process::Command::new("icacls")
+                .arg(path)
+                .args(["/remove:d", "*S-1-1-0"])
+                .status()
+                .expect("icacls を動かす");
+            assert!(status.success(), "icacls: {status}");
+        }
+    }
+
+    /// 置き場を守るほかのアプリが `trusted/`・`rejected/` に置いた、読めない印の
+    /// ファイルがあっても、移行と自分の証明書の用意は成功する（Issue #64）。
+    #[test]
+    fn unreadable_marker_files_do_not_break_migration() {
+        let root = tempfile::tempdir().expect("試験用ディレクトリ");
+        let pki = root.path().join("own");
+        let list = TrustList::new(&pki);
+        let (der, summary) = peer(root.path(), "peer");
+        ensure_dirs(&pki).expect("一覧を作る");
+        std::fs::write(pki.join("trusted").join(legacy(&der)), &der).expect("旧い名前で信頼");
+        let markers: Vec<_> = [TRUSTED_DIR, REJECTED_DIR]
+            .into_iter()
+            .map(|dir| pki.join(dir).join(".banto-safe-root"))
+            .collect();
+        let mut unreadable = true;
+        for marker in &markers {
+            std::fs::write(marker, b"marker").expect("印を置く");
+            unreadable &= make_unreadable(marker);
+        }
+        if !unreadable {
+            eprintln!("root では読めないファイルを作れないため、読めないことは確かめない");
+        }
+
+        let migrated = list.migrate();
+        let prepared =
+            prepare_own_certificate(&pki, &ApplicationIdentity::new("own", "urn:banto:test:own"));
+        let listed = list.certificates();
+        let state = list.state_of(&summary.thumbprint);
+        for marker in &markers {
+            make_readable(marker);
+        }
+        assert_eq!(migrated.expect("印は開かずに移す"), 1);
+        prepared.expect("自分の証明書を用意できる");
+        assert_eq!(listed.expect("一覧").len(), 1);
+        assert_eq!(state.expect("状態"), Some(TrustState::Trusted));
+        for marker in &markers {
+            assert_eq!(std::fs::read(marker).expect("印は残る"), b"marker");
+        }
     }
 
     /// 移し先に壊れたファイルが残っていても、正しく置き直してから移し元を消す。
