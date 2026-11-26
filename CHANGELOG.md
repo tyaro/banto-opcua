@@ -5,9 +5,18 @@
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-11-26
+
+pki の信頼の一覧の移行が、読めない印のファイルで起動を止める不具合を直す（#64、#65）。公開 API の変更はない。
+取り込む側は `tag = "v0.3.4"` を使う。
+
+### 変更
+
+- workspace の version を 0.3.4 にした。
+
 ### 修正
 
-- pki の `TrustList::migrate`（`prepare_own_certificate` も起動のたびに呼ぶ）が、`trusted/`・`rejected/` の中の正規の名前でないファイルをすべて開いていた。置き場を守るほかのアプリが置いた、利用者には読めない印のファイル（banto-safe-root の `.banto-safe-root` など）があると `PermissionDenied` で失敗し、サーバーが起動しなかった。旧い async-opcua の名前の形（`<CN> [<小文字の拇印>].der`）に合わないファイルは開かずに飛ばす（#64）。一覧のほかの操作は前から正規の名前のファイルしか開かない。
+- pki の `TrustList::migrate`（`prepare_own_certificate` も起動のたびに呼ぶ）が、`trusted/`・`rejected/` の中の正規の名前でないファイルをすべて開いていた。置き場を守るほかのアプリが置いた、利用者には読めない印のファイル（banto-safe-root の `.banto-safe-root` など）があると `PermissionDenied` で失敗し、サーバーが起動しなかった。旧い async-opcua の名前の形（`<CN> [<小文字の拇印>].der`）に合わないファイルは開かずに飛ばす。一覧のほかの操作は前から正規の名前のファイルしか開かない。
 
 ## [0.3.3] - 2026-11-24
 
@@ -154,7 +163,8 @@ ADR-0004 の書き込みハンドラーに通す Write を含む。
 - 自由関数 `endpoint_url` を公開 API から外した。`ServerConfig::endpoint_url` を使う。
 - `RunningServer::namespace_index()` を追加。`Error::TagUpdate` の表示文言をタグ操作全般に合わせた。
 
-[Unreleased]: https://github.com/tyaro/banto-opcua/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/tyaro/banto-opcua/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/tyaro/banto-opcua/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/tyaro/banto-opcua/compare/v0.3.2...v0.3.3
 [0.3.1]: https://github.com/tyaro/banto-opcua/compare/v0.3.0...v0.3.2
 [0.3.0]: https://github.com/tyaro/banto-opcua/compare/v0.2.0...v0.3.0
