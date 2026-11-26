@@ -662,8 +662,9 @@ mod tests {
         }
     }
 
-    /// `path` を、この試験のプロセスから読めなくする。読めなくできたら `true`
-    /// （root など権限を無視して読める環境では `false`）。
+    /// `path` を、この試験のプロセスから読めなくする。読み出しが `PermissionDenied` に
+    /// なったら `true`。読めてしまったときに `false` を返して続けるのは、権限を無視して
+    /// 読める Unix の root だけで、Windows で拒否が効かなければ試験を失敗にする。
     fn make_unreadable(path: &Path) -> bool {
         #[cfg(unix)]
         {
@@ -682,7 +683,14 @@ mod tests {
                 .expect("icacls を動かす");
             assert!(status.success(), "icacls: {status}");
         }
-        std::fs::read(path).is_err()
+        match std::fs::read(path) {
+            Err(error) => {
+                assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+                true
+            }
+            Ok(_) if cfg!(unix) => false,
+            Ok(_) => panic!("読み出しを拒否できていない: {}", path.display()),
+        }
     }
 
     fn make_readable(path: &Path) {
